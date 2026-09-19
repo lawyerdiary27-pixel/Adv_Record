@@ -1,1 +1,3311 @@
-# Adv_Record
+<!doctype html>
+<html lang="en">
+<head>
+
+<script>
+/* =========================
+   MACT V9 CLOUD CONFIG
+   =========================
+   Create a Firebase Web App and paste its config below.
+   Do NOT put a service-account/private key here.
+*/
+window.MACT_FIREBASE_CONFIG = {
+  apiKey: "PASTE_FIREBASE_API_KEY",
+  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_PROJECT_ID.firebasestorage.app",
+  messagingSenderId: "PASTE_MESSAGING_SENDER_ID",
+  appId: "PASTE_FIREBASE_APP_ID"
+};
+window.MACT_CLOUD_COLLECTION = "mactUsers";
+window.MACT_CLOUD_VERSION = "V9";
+</script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.2.1/firebase-app.js";
+import {
+  getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect,
+  getRedirectResult, onAuthStateChanged, signOut
+} from "https://www.gstatic.com/firebasejs/12.2.1/firebase-auth.js";
+import {
+  getFirestore, doc, getDoc, setDoc, onSnapshot,
+  serverTimestamp, runTransaction
+} from "https://www.gstatic.com/firebasejs/12.2.1/firebase-firestore.js";
+
+const cfg=window.MACT_FIREBASE_CONFIG||{};
+const configured=cfg.apiKey && !String(cfg.apiKey).startsWith("PASTE_") &&
+                 cfg.projectId && !String(cfg.projectId).startsWith("YOUR_");
+
+window.MACTFirebase = {configured:false, user:null, unsubscribe:null};
+
+if(configured){
+  try{
+    const app=initializeApp(cfg);
+    const auth=getAuth(app);
+    const db=getFirestore(app);
+    const provider=new GoogleAuthProvider();
+    provider.setCustomParameters({prompt:"select_account"});
+    window.MACTFirebase={configured:true,app,auth,db,provider,user:null,unsubscribe:null};
+
+    window.mactGoogleLogin=async()=>{
+      try{
+        await signInWithPopup(auth,provider);
+      }catch(err){
+        if(["auth/popup-blocked","auth/popup-closed-by-user","auth/operation-not-supported-in-this-environment"].includes(err.code)){
+          await signInWithRedirect(auth,provider);
+        }else throw err;
+      }
+    };
+    window.mactGoogleLogout=()=>signOut(auth);
+
+    getRedirectResult(auth).catch(err=>console.warn("Google redirect:",err));
+
+    onAuthStateChanged(auth, async user=>{
+      window.MACTFirebase.user=user||null;
+      if(window.MACTFirebase.unsubscribe){window.MACTFirebase.unsubscribe();window.MACTFirebase.unsubscribe=null;}
+      window.dispatchEvent(new CustomEvent("mact-auth",{detail:{user}}));
+      if(!user) return;
+
+      const ref=doc(db,window.MACT_CLOUD_COLLECTION,user.uid);
+      try{
+        const snap=await getDoc(ref);
+        if(!snap.exists()){
+          await setDoc(ref,{
+            email:user.email||"",
+            displayName:user.displayName||"",
+            photoURL:user.photoURL||"",
+            createdAt:serverTimestamp(),
+            updatedAt:serverTimestamp(),
+            records:[]
+          },{merge:true});
+        }
+      }catch(e){console.error("Cloud account init:",e);}
+
+      window.MACTFirebase.unsubscribe=onSnapshot(ref,
+        snap=>{
+          if(!snap.exists())return;
+          const data=snap.data()||{};
+          window.dispatchEvent(new CustomEvent("mact-cloud-data",{detail:{data}}));
+        },
+        err=>console.error("Cloud listener:",err)
+      );
+    });
+  }catch(e){
+    console.error("Firebase initialization failed:",e);
+  }
+}
+</script>
+
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MACT Legal Portal & Case Management — Professional</title>
+<style>
+:root{--primary:#1e3a8a;--primary-light:#dbeafe;--secondary:#475569;--success:#16a34a;--warning:#d97706;--danger:#dc2626;--bg:#f8fafc;--card:#ffffff;--text:#0f172a;--border:#cbd5e1}
+*{box-sizing:border-box}
+body{font-family:Arial,sans-serif;margin:0;background:var(--bg);color:var(--text);padding:15px}
+header{display:flex;justify-content:space-between;align-items:center;background:var(--card);padding:15px 20px;border-radius:10px;box-shadow:0 2px 4px rgba(0,0,0,0.05);margin-bottom:20px;flex-wrap:wrap;gap:10px}
+h1{margin:0;font-size:22px;color:var(--primary)}
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:20px}
+.stat-card{background:var(--card);padding:15px;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.05);border-left:4px solid var(--primary)}
+.stat-card h3{margin:0 0 5px;font-size:13px;color:var(--secondary)}
+.stat-card .value{font-size:20px;font-weight:bold}
+.actions-bar{display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap}
+.btn{background:var(--primary);color:#fff;border:none;padding:8px 14px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;display:inline-flex;align-items:center;gap:5px}
+.btn:hover{opacity:0.9}
+.btn-success{background:var(--success)}
+.btn-warning{background:var(--warning)}
+.btn-danger{background:var(--danger)}
+.btn-light{background:#e2e8f0;color:#334155}
+.card{background:var(--card);border-radius:10px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,0.05);margin-bottom:20px}
+.search-box{width:100%;padding:10px;border:1px solid var(--border);border-radius:6px;margin-bottom:15px;font-size:14px}
+table{width:100%;border-collapse:collapse;margin-top:10px}
+th,td{padding:10px;border-bottom:1px solid var(--border);text-align:left;font-size:13px}
+th{background:#f1f5f9;color:var(--secondary);font-weight:600}
+.badge{padding:3px 8px;border-radius:12px;font-size:11px;font-weight:600;background:#e2e8f0;color:#475569}
+.badge.success{background:#dcfce7;color:#166534}
+.badge.warning{background:#fef3c7;color:#92400e}
+.badge.danger{background:#fee2e2;color:#991b1b}
+.modal{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);display:none;justify-content:center;align-items:center;z-index:1000;padding:15px}
+.modal.show{display:flex}
+.modal-content{background:var(--card);width:100%;max-width:900px;max-height:90vh;border-radius:10px;overflow-y:auto;padding:25px;box-shadow:0 4px 12px rgba(0,0,0,0.15)}
+.section{margin-bottom:20px;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.section-title{background:#f1f5f9;padding:12px 15px;font-weight:bold;font-size:14px;cursor:pointer;display:flex;justify-content:space-between;align-items:center}
+.section-body{padding:15px}
+.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}
+.field{display:flex;flex-direction:column;gap:5px}
+.field.full{grid-column:1/-1}
+label{font-size:12px;font-weight:600;color:var(--secondary)}
+input,select,textarea{padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;width:100%}
+textarea{resize:vertical;min-height:70px}
+.proceeding{background:#f8fafc;border:1px solid var(--border);padding:12px;border-radius:6px;margin-bottom:10px}
+.proceeding-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.proceeding-grid{display:grid;grid-template-columns:1fr 1fr 2fr;gap:10px}
+@media(max-width:768px){.proceeding-grid{grid-template-columns:1fr}}
+.status{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px}
+.status.online{background:var(--success)}
+.status.offline{background:var(--danger)}
+.toast{position:fixed;bottom:20px;right:20px;background:#0f172a;color:#fff;padding:10px 20px;border-radius:6px;box-shadow:0 4px 6px rgba(0,0,0,0.1);z-index:2000;display:none;font-size:13px}
+.toast.show{display:block}
+.case-link{color:var(--primary);cursor:pointer;font-weight:600}
+.case-link:hover{text-decoration:underline}
+.field-handle{cursor:grab;font-size:10px;color:#94a3b8;margin-bottom:2px}
+.dragging{opacity:0.4}
+
+/* ===== ADVANCED CRM ADD-ON ===== */
+.adv-toolbar{display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin:10px 0}.adv-toolbar select,.adv-toolbar input{width:auto;min-width:120px;margin:0}.adv-panel{background:#f8fafc;border:1px solid #cbd5e1;border-radius:8px;padding:10px;margin:8px 0}.adv-panel[hidden]{display:none}.adv-pagination{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px}.adv-page-buttons{display:flex;gap:5px;flex-wrap:wrap}.adv-page-buttons button{min-width:34px}.adv-muted{font-size:11px;color:#64748b}.adv-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin:10px 0}.adv-kpi{background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:10px}.adv-kpi b{display:block;font-size:18px;color:#1e3a8a}.adv-kpi span{font-size:11px;color:#64748b}.adv-timeline{position:relative;padding-left:18px}.adv-timeline:before{content:"";position:absolute;left:5px;top:0;bottom:0;width:2px;background:#cbd5e1}.adv-timeline-item{position:relative;margin:0 0 12px;padding:9px 10px;background:#fff;border:1px solid #e2e8f0;border-radius:8px}.adv-timeline-item:before{content:"";position:absolute;left:-17px;top:13px;width:8px;height:8px;border-radius:50%;background:#1e3a8a}.adv-doc{display:flex;justify-content:space-between;gap:8px;align-items:center;border:1px solid #e2e8f0;border-radius:7px;padding:8px;margin:6px 0;background:#fff}.adv-danger-text{color:#b91c1c;font-weight:700}.adv-lock{font-size:10px;margin-left:5px}.adv-modal-wide{max-width:850px!important}.adv-help{font-size:11px;color:#64748b;margin-top:4px}
+@media(max-width:768px){.adv-toolbar select,.adv-toolbar input{flex:1;min-width:135px}.adv-toolbar .btn{flex:1;justify-content:center}.adv-doc{align-items:flex-start;flex-direction:column}}
+
+/* ===== PREMIUM MACT LEGAL PRO UI — VISUAL LAYER ONLY ===== */
+:root{--primary:#123b78;--primary2:#2563eb;--gold:#c89b3c;--gold-soft:#f5e7c3;--bg:#f3f6fb;--card:#fff;--text:#0b1830;--secondary:#64748b;--border:#d9e2ef;--success:#059669;--warning:#d97706;--danger:#dc2626;--shadow:0 10px 30px rgba(15,35,70,.08);--shadow2:0 18px 45px rgba(15,35,70,.12)}
+html{scroll-behavior:smooth}body{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;background:radial-gradient(circle at 15% 0%,#e9f1ff 0,transparent 28%),linear-gradient(180deg,#f7f9fd 0%,#eef3f9 100%);color:var(--text);padding:14px;letter-spacing:.05px}
+body:before{content:"";position:fixed;inset:0;pointer-events:none;background:linear-gradient(120deg,rgba(37,99,235,.025),transparent 35%,rgba(200,155,60,.025));z-index:-1}
+header{position:sticky;top:10px;z-index:90;background:linear-gradient(135deg,#0b2348,#123b78 58%,#1e5bb8);color:#fff;padding:16px 18px;border:1px solid rgba(255,255,255,.12);border-radius:18px;box-shadow:0 14px 35px rgba(9,32,70,.2);margin-bottom:18px;backdrop-filter:blur(12px)}
+header h1{color:#fff;font-size:21px;letter-spacing:.2px}header h1:after{content:" • SMART CASE MANAGEMENT";font-size:9px;color:#f5d98b;font-weight:700;letter-spacing:1.2px;vertical-align:middle;margin-left:6px}
+header [id="connectionStatus"]{color:#dbeafe}header [id="syncStatus"],header [id="lastSyncStatus"]{color:#d7e5fb}
+header .btn{box-shadow:0 5px 14px rgba(0,0,0,.12)}header .btn-light{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.18);color:#fff}
+.btn{border-radius:10px;padding:9px 13px;transition:transform .16s ease,box-shadow .16s ease,filter .16s ease}.btn:hover{opacity:1;transform:translateY(-1px);box-shadow:0 7px 16px rgba(15,35,70,.14)}.btn:active{transform:translateY(0)}
+.stats-grid{grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:18px}.stat-card{position:relative;overflow:hidden;padding:17px 18px;border:1px solid var(--border);border-left:0;border-radius:16px;box-shadow:var(--shadow);background:rgba(255,255,255,.94)}.stat-card:before{content:"";position:absolute;left:0;top:0;bottom:0;width:5px;background:linear-gradient(180deg,var(--primary2),var(--gold))}.stat-card:after{content:"";position:absolute;right:-25px;bottom:-35px;width:90px;height:90px;border-radius:50%;background:rgba(37,99,235,.05)}.stat-card h3{font-size:11px;text-transform:uppercase;letter-spacing:.7px;color:#64748b}.stat-card .value{font-size:28px;color:#0b2348;margin-top:2px}
+.card{border:1px solid var(--border);border-radius:17px;padding:18px;box-shadow:var(--shadow);background:rgba(255,255,255,.94);margin-bottom:17px}.card h2{color:#123b78}.card>div:first-child h2{letter-spacing:.1px}
+#advancedControlCard{background:linear-gradient(135deg,#fff,#f7fbff);border-color:#cddbf0}.adv-toolbar{gap:8px}.adv-panel{background:#f8fbff;border-color:#d8e4f3;border-radius:12px}.adv-kpi{border-radius:12px;box-shadow:0 4px 12px rgba(15,35,70,.05)}
+.search-box{height:46px;border:1px solid #cbd8e8;border-radius:13px;background:#fbfdff;padding:11px 14px;font-size:14px;box-shadow:inset 0 1px 2px rgba(15,35,70,.03);outline:none}.search-box:focus,input:focus,select:focus,textarea:focus{border-color:#4f83dc;box-shadow:0 0 0 3px rgba(37,99,235,.10);outline:none}
+table{border-collapse:separate;border-spacing:0 6px;margin-top:7px}th{background:#edf3fb;color:#38516f;border:0;text-transform:uppercase;font-size:10px;letter-spacing:.55px;padding:11px 10px}th:first-child{border-radius:9px 0 0 9px}th:last-child{border-radius:0 9px 9px 0}td{background:#fff;border-top:1px solid #e4ebf4;border-bottom:1px solid #e4ebf4;padding:11px 10px}td:first-child{border-left:1px solid #e4ebf4;border-radius:10px 0 0 10px}td:last-child{border-right:1px solid #e4ebf4;border-radius:0 10px 10px 0}tbody tr{transition:transform .15s ease,box-shadow .15s ease}tbody tr:hover{transform:translateY(-1px)}.case-link{color:#1458b5}.badge{border:1px solid #dce5ef;padding:4px 9px;border-radius:999px}.badge.success{border-color:#b7e8d4}.badge.warning{border-color:#f4d99a}.badge.danger{border-color:#fecaca}
+.section{border:1px solid #dbe5f0;border-radius:13px;box-shadow:0 3px 10px rgba(15,35,70,.035);margin-bottom:14px}.section-title{background:linear-gradient(90deg,#f1f6fc,#fbfdff);color:#173b6b;padding:13px 15px}.section-title:hover{background:#edf4fc}.section-body{background:#fff;padding:15px}.field{gap:6px}.field-handle{color:#a2b2c6}label{font-size:11px;letter-spacing:.15px;color:#52677f}input,select,textarea{border-color:#d3deeb;border-radius:9px;background:#fff;padding:9px 10px;min-height:38px}textarea{min-height:82px}
+.modal{background:rgba(5,18,38,.58);backdrop-filter:blur(5px);padding:12px}.modal-content{border:1px solid rgba(210,224,242,.9);border-radius:18px;box-shadow:var(--shadow2);padding:22px;animation:premiumIn .18s ease-out}.modal-content h2{color:#123b78}@keyframes premiumIn{from{opacity:0;transform:translateY(8px) scale(.985)}to{opacity:1;transform:none}}
+.proceeding{background:linear-gradient(135deg,#f8fbff,#fff);border-color:#dce6f1;border-radius:11px}.toast{border-radius:11px;box-shadow:0 12px 28px rgba(0,0,0,.18)}
+/* Mobile: turn dense CRM table into readable horizontal card-like rows */
+@media(max-width:768px){body{padding:9px}header{position:relative;top:auto;border-radius:15px;padding:14px;margin-bottom:12px}header h1{font-size:18px}header h1:after{display:block;margin:4px 0 0;font-size:8px}.stats-grid{grid-template-columns:repeat(2,1fr);gap:9px}.stat-card{padding:13px 14px;border-radius:13px}.stat-card .value{font-size:23px}.card{padding:13px;border-radius:14px}.card h2{font-size:15px!important}.actions-bar,.adv-toolbar{gap:7px}.adv-toolbar .btn{min-height:40px}.adv-toolbar select,.adv-toolbar input{min-height:40px}.search-box{height:44px}.modal{align-items:flex-end;padding:0}.modal-content{max-height:94vh;border-radius:19px 19px 0 0;padding:16px;width:100%;animation:premiumSheet .2s ease-out}@keyframes premiumSheet{from{transform:translateY(20px);opacity:.5}to{transform:none;opacity:1}}.form-grid{grid-template-columns:1fr!important}.field.full{grid-column:auto}table{min-width:1050px}#recordsTableBody td{font-size:12px}.section-title{font-size:13px}.proceeding-grid{gap:8px}.adv-pagination{font-size:11px}}
+@media(min-width:769px) and (max-width:1100px){.stats-grid{grid-template-columns:repeat(2,1fr)}}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+
+/* ===== USER REQUESTED LAYOUT / PRINT / PETITION FEATURES ===== */
+.hidden{display:none!important}
+.modal-content.modal-maximized{max-width:none!important;width:100vw;height:100vh;max-height:100vh;border-radius:0;padding:22px}
+.layout-field-row{display:flex;align-items:center;gap:8px;padding:7px 9px;border-bottom:1px solid #e5eaf1;background:#fff}
+.layout-field-row label{flex:1;font-size:12px}
+.layout-section-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;background:#edf3fb;border-radius:9px;margin-top:10px}
+.print-check-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:6px}
+.print-check{display:flex;align-items:center;gap:7px;padding:7px 9px;border:1px solid #e1e8f0;border-radius:8px;background:#fff;font-size:12px}
+.petition-toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+#petitionText{min-height:60vh;font-family:Georgia,serif;line-height:1.55}
+@media(max-width:768px){.print-check-grid{grid-template-columns:1fr}.modal-content.modal-maximized{padding:14px}}
+
+
+/* Hearing print column ordering */
+.hearing-print-order{display:flex;flex-direction:column;gap:7px;margin-top:10px;max-height:55vh;overflow:auto;padding:2px}
+.hearing-print-row{display:grid;grid-template-columns:28px 28px 1fr 34px 34px;align-items:center;gap:7px;padding:9px 10px;border:1px solid #dfe7f1;border-radius:10px;background:#fff;cursor:grab;box-shadow:0 2px 7px rgba(20,45,80,.04)}
+.hearing-print-row.dragging{opacity:.55;border-style:dashed}.hearing-print-row .drag{color:#8a99ad;font-size:16px;text-align:center}.hearing-print-row label{font-size:12px;font-weight:700;color:#23354f}.hearing-print-row small{display:block;color:#8190a4;font-size:9px;font-weight:500;margin-top:2px}
+.hearing-print-row button{width:30px;height:30px;padding:0}.hearing-print-row input{width:17px;height:17px}
+@media(max-width:768px){.hearing-print-row{grid-template-columns:24px 25px 1fr 32px 32px}.hearing-print-row button{width:28px;height:28px}}
+
+/* premium scrollbar */
+::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-track{background:#edf2f8}::-webkit-scrollbar-thumb{background:#b8c8dc;border-radius:99px}::-webkit-scrollbar-thumb:hover{background:#8ea6c2}
+
+
+/* MACT Professional v6 lock overlay */
+#pinUnlockModal{z-index:99999 !important;}
+#pinUnlockModal.show{display:flex !important;pointer-events:auto !important;}
+#pinUnlockModal .modal-content{position:relative;z-index:100000;box-shadow:0 24px 80px rgba(15,23,42,.35);}
+html.mact-locked,html.mact-locked body{overflow:hidden;}
+</style>
+<style id="professional-dashboard">
+:root{--navy:#0b1736;--navy2:#132653;--gold:#c9a227;--ink:#172033;--muted:#64748b;--bg:#f5f7fb;--card:#fff;--line:#e7ebf2;--shadow:0 14px 40px rgba(15,23,42,.08);--radius:18px}
+body{background:linear-gradient(135deg,#f7f9fc 0%,#eef2f8 100%);color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+header,.topbar{background:linear-gradient(120deg,var(--navy),var(--navy2))!important;box-shadow:0 10px 30px rgba(11,23,54,.22)!important;border-bottom:1px solid rgba(255,255,255,.12)!important}
+.logo,.brand{font-weight:800;letter-spacing:.2px}.logo small,.brand small{color:#d7c36a!important}
+button,.btn{border-radius:11px!important;font-weight:650!important;transition:.18s ease!important;box-shadow:none!important}.btn:hover,button:hover{transform:translateY(-1px);filter:brightness(1.03)}
+.card,.section,.modal-content,.adv-panel,.stat-card,.kpi,.dashboard-card{border:1px solid var(--line)!important;border-radius:var(--radius)!important;box-shadow:var(--shadow)!important;background:rgba(255,255,255,.94)!important}
+input,select,textarea{border:1px solid #d8deea!important;border-radius:10px!important;background:#fff!important;transition:border-color .15s,box-shadow .15s!important}input:focus,select:focus,textarea:focus{border-color:#536fae!important;box-shadow:0 0 0 4px rgba(59,91,153,.1)!important;outline:0!important}
+.section-title,.card-title{font-weight:800!important;color:var(--navy)!important;letter-spacing:.15px}
+.stats,.kpis,.stat-grid{gap:16px!important}.stat-card,.kpi{padding:20px!important;position:relative;overflow:hidden}.stat-card:before,.kpi:before{content:"";position:absolute;inset:0 0 auto 0;height:4px;background:linear-gradient(90deg,var(--gold),#e8d78a);}
+table{border-collapse:separate!important;border-spacing:0 7px!important}thead th{background:#eef2f8!important;color:#34415a!important;border:0!important;font-size:12px;text-transform:uppercase;letter-spacing:.05em}tbody tr{background:#fff!important;box-shadow:0 4px 14px rgba(15,23,42,.045)!important}tbody td{border-top:1px solid var(--line)!important;border-bottom:1px solid var(--line)!important}tbody td:first-child{border-left:1px solid var(--line)!important;border-radius:10px 0 0 10px}tbody td:last-child{border-right:1px solid var(--line)!important;border-radius:0 10px 10px 0}.case-link{font-weight:750!important;color:#173b78!important}
+.status.online{background:#dcfce7!important;color:#166534!important}.status.offline{background:#fee2e2!important;color:#991b1b!important}
+.modal{backdrop-filter:blur(6px);background:rgba(7,17,38,.52)!important}.modal-content{max-height:92vh;overflow:auto}
+.toast{border-radius:12px!important;box-shadow:0 15px 35px rgba(15,23,42,.2)!important}
+@media(max-width:800px){body{font-size:14px}.card,.section,.modal-content{border-radius:14px!important}.stats,.kpis,.stat-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}.table-wrap{overflow-x:auto}header,.topbar{position:sticky;top:0;z-index:30}}
+@media(max-width:520px){.stats,.kpis,.stat-grid{grid-template-columns:1fr!important}}
+</style>
+
+
+<style id="mact-office-ui">
+:root{
+ --office-navy:#0b1736;--office-navy2:#162a59;--office-gold:#c9a227;--office-bg:#f4f6fa;
+ --office-card:#fff;--office-text:#172033;--office-muted:#6b7890;--office-line:#e5e9f1;
+}
+body{padding:0!important;background:var(--office-bg)!important}
+body.mact-dark{--office-bg:#0b1220;--office-card:#111b2e;--office-text:#e8edf7;--office-muted:#9aa8bd;--office-line:#26334a;background:#0b1220!important;color:var(--office-text)!important}
+body.mact-dark .card,body.mact-dark .stat-card,body.mact-dark .mact-dash-card{background:#111b2e!important;border-color:#26334a!important;color:#e8edf7!important}
+body.mact-dark input,body.mact-dark select,body.mact-dark textarea{background:#0f192a!important;color:#e8edf7!important;border-color:#33425d!important}
+body.mact-dark table tbody tr{background:#111b2e!important;color:#e8edf7!important}
+body.mact-dark thead th{background:#1a2740!important;color:#cbd5e1!important}
+body.mact-dark .mact-sidebar{background:#091126}
+.mact-sidebar{position:fixed;left:0;top:0;bottom:0;width:248px;background:linear-gradient(180deg,#091431,#101f45 62%,#0b1736);color:#fff;z-index:1000;padding:20px 14px;display:flex;flex-direction:column;box-shadow:12px 0 35px rgba(9,20,49,.16)}
+.mact-brand{display:flex;align-items:center;gap:11px;padding:6px 10px 22px;border-bottom:1px solid rgba(255,255,255,.1)}
+.mact-brand-icon{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;background:linear-gradient(145deg,#d8b642,#a98312);font-size:21px;box-shadow:0 7px 18px rgba(201,162,39,.2)}
+.mact-brand strong{display:block;font-size:14px;letter-spacing:.2px}.mact-brand small{display:block;color:#aebbd5;font-size:10px;margin-top:3px}
+.mact-nav{padding-top:18px;overflow:auto}.mact-nav-label{font-size:9px;text-transform:uppercase;letter-spacing:.14em;color:#8190ad;padding:0 12px 8px;font-weight:800}
+.mact-nav button{width:100%;border:0;background:transparent;color:#cbd5e1;text-align:left;padding:10px 12px;margin:2px 0;border-radius:10px;font-size:12px;cursor:pointer}
+.mact-nav button:hover,.mact-nav button.active{background:rgba(255,255,255,.09);color:#fff}.mact-nav button.active{box-shadow:inset 3px 0 0 #d5b23b}
+.mact-nav .ico{display:inline-block;width:23px;font-size:14px}
+.mact-side-bottom{margin-top:auto;padding:12px 8px 0;border-top:1px solid rgba(255,255,255,.1)}
+.mact-user{display:flex;align-items:center;gap:9px;padding:8px}.mact-avatar{width:32px;height:32px;border-radius:50%;background:#d9e3f4;color:#10234a;display:grid;place-items:center;font-weight:800}
+.mact-main{margin-left:248px;min-height:100vh}.mact-main header{border-radius:0!important;margin:0!important;padding:15px 26px!important;position:sticky;top:0;z-index:50}
+.mact-dash-wrap{padding:24px 26px 8px}.mact-dash-head{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin-bottom:18px}
+.mact-eyebrow{font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:#8a6d19;font-weight:900}.mact-dash-title{font-size:25px;font-weight:850;color:var(--office-navy);margin:3px 0}.mact-dark .mact-dash-title{color:#eef3fb}
+.mact-dash-sub{font-size:12px;color:var(--office-muted)}.mact-actions{display:flex;gap:8px;flex-wrap:wrap}
+.mact-action{border:1px solid var(--office-line);background:var(--office-card);color:var(--office-text);padding:9px 12px;border-radius:10px;font-weight:700;font-size:11px;cursor:pointer}
+.mact-action.primary{background:var(--office-navy);color:#fff;border-color:var(--office-navy)}
+.mact-action.gold{background:#fff8df;border-color:#e9d28a;color:#755a0a}
+.mact-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:16px}
+.mact-kpi{position:relative;background:var(--office-card);border:1px solid var(--office-line);border-radius:15px;padding:16px;box-shadow:0 8px 25px rgba(15,23,42,.055);overflow:hidden}
+.mact-kpi:after{content:"";position:absolute;width:70px;height:70px;border-radius:50%;right:-25px;top:-30px;background:rgba(201,162,39,.09)}
+.mact-kpi-label{font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--office-muted);font-weight:800}.mact-kpi-value{font-size:27px;font-weight:850;color:var(--office-navy);margin-top:5px}.mact-dark .mact-kpi-value{color:#f4f7fc}
+.mact-kpi-meta{font-size:10px;color:var(--office-muted);margin-top:4px}.mact-kpi-icon{position:absolute;right:15px;top:15px;font-size:20px}
+.mact-grid{display:grid;grid-template-columns:1.65fr 1fr;gap:16px;margin-bottom:16px}.mact-dash-card{background:var(--office-card);border:1px solid var(--office-line);border-radius:16px;padding:17px;box-shadow:0 8px 25px rgba(15,23,42,.055)}
+.mact-card-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:13px}.mact-card-head h3{font-size:14px;margin:0;color:var(--office-navy)}.mact-dark .mact-card-head h3{color:#eef3fb}.mact-card-head span{font-size:10px;color:var(--office-muted)}
+.mact-hearing-row{display:flex;align-items:center;gap:11px;padding:9px 0;border-bottom:1px solid var(--office-line)}.mact-hearing-row:last-child{border-bottom:0}.mact-date-box{width:44px;height:42px;border-radius:10px;background:#f1f5fb;display:grid;place-items:center;text-align:center;flex:0 0 auto}.mact-date-box b{font-size:14px;color:#16366f}.mact-date-box small{font-size:8px;color:#71809a;text-transform:uppercase}.mact-hearing-main{min-width:0;flex:1}.mact-hearing-main strong{display:block;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mact-hearing-main span{font-size:9px;color:var(--office-muted)}.mact-pill{font-size:8px!important;font-weight:900;padding:4px 7px;border-radius:999px;background:#fff3d6;color:#8a6200!important}
+.mact-quick-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}.mact-quick{padding:13px;border:1px solid var(--office-line);border-radius:12px;background:var(--office-bg);cursor:pointer}.mact-quick:hover{border-color:#b9c5d8;transform:translateY(-1px)}.mact-quick b{display:block;font-size:11px}.mact-quick span{display:block;font-size:9px;color:var(--office-muted);margin-top:3px}
+.mact-bars{display:flex;align-items:flex-end;gap:12px;height:130px;padding:8px 5px 0}.mact-bar-col{flex:1;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:5px}.mact-bar{width:100%;max-width:34px;border-radius:6px 6px 3px 3px;background:linear-gradient(180deg,#31548f,#132b5e);min-height:3px}.mact-bar-label{font-size:8px;color:var(--office-muted)}.mact-bar-val{font-size:8px;font-weight:800;color:var(--office-text)}
+.mact-progress{height:7px;background:#edf1f6;border-radius:99px;overflow:hidden}.mact-progress i{display:block;height:100%;background:linear-gradient(90deg,#c9a227,#e2ca72);border-radius:99px}
+.mact-section-anchor{scroll-margin-top:85px}
+@media(max-width:1050px){.mact-sidebar{width:210px}.mact-main{margin-left:210px}.mact-kpis{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:760px){.mact-sidebar{position:relative;width:100%;height:auto;padding:10px;bottom:auto}.mact-brand{padding-bottom:10px}.mact-nav{display:flex;overflow:auto;padding-top:8px;gap:3px}.mact-nav-label,.mact-side-bottom{display:none}.mact-nav button{white-space:nowrap;width:auto}.mact-main{margin-left:0}.mact-main header{padding:12px 14px!important}.mact-dash-wrap{padding:16px 14px 5px}.mact-dash-head{align-items:flex-start;flex-direction:column}.mact-grid{grid-template-columns:1fr}.mact-kpis{grid-template-columns:1fr 1fr}}
+@media(max-width:460px){.mact-kpis{grid-template-columns:1fr}.mact-dash-title{font-size:21px}}
+</style>
+
+<!-- NEW IMPROVEMENTS CSS -->
+<style>
+/* Focus rings & accessibility */
+.btn:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid #2563eb;outline-offset:2px}
+/* Better empty state */
+.empty-state{text-align:center;padding:40px 20px;color:#64748b}
+.empty-state .icon{font-size:42px;margin-bottom:12px;opacity:.6}
+/* Header badge for today's hearings */
+.header-today-badge{background:#fef3c7;color:#92400e;font-size:11px;font-weight:700;padding:4px 10px;border-radius:999px;margin-left:8px}
+body.mact-dark .header-today-badge{background:#3f2e0a;color:#fcd34d}
+/* Draft indicator */
+.draft-indicator{font-size:11px;color:#d97706;margin-left:8px}
+/* Smooth table loading */
+#recordsTableBody.loading{opacity:.55;pointer-events:none}
+</style>
+
+<style id="mact-v7-enhancements">
+:root{
+  --v7-accent:#2563eb;--v7-accent2:#7c3aed;--v7-ring:0 0 0 4px rgba(37,99,235,.12);
+  --v7-shadow:0 16px 45px rgba(15,23,42,.08)
+}
+.mact-v7-toolbar{
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 14px;
+  background:linear-gradient(90deg,rgba(255,255,255,.96),rgba(244,248,255,.92));
+  border-bottom:1px solid var(--office-line);position:sticky;top:68px;z-index:35;
+  backdrop-filter:blur(12px)
+}
+.mact-v7-toolbar .v7-search{flex:1;min-width:210px;height:40px;margin:0}
+.v7-chip{display:inline-flex;align-items:center;gap:5px;padding:7px 10px;border:1px solid var(--office-line);
+  border-radius:999px;background:var(--office-card);font-size:10px;font-weight:800;color:var(--office-text)}
+.v7-dot{width:7px;height:7px;border-radius:50%;background:#16a34a;box-shadow:0 0 0 3px rgba(22,163,74,.12)}
+.v7-live{font-size:10px;color:var(--office-muted);margin-left:auto}
+.v7-command{
+  position:fixed;inset:0;background:rgba(2,8,23,.52);backdrop-filter:blur(7px);z-index:100001;
+  display:none;align-items:flex-start;justify-content:center;padding:9vh 16px
+}
+.v7-command.show{display:flex}
+.v7-command-box{width:min(680px,100%);background:var(--office-card);border:1px solid var(--office-line);
+  border-radius:18px;box-shadow:0 30px 90px rgba(0,0,0,.25);overflow:hidden}
+.v7-command-box input{border:0!important;border-bottom:1px solid var(--office-line)!important;border-radius:0!important;
+  height:52px;font-size:15px;box-shadow:none!important}
+.v7-command-list{max-height:55vh;overflow:auto;padding:8px}
+.v7-command-item{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 12px;border-radius:10px;cursor:pointer}
+.v7-command-item:hover,.v7-command-item.active{background:#eef4ff}
+.v7-command-item b{font-size:12px}.v7-command-item span{font-size:10px;color:var(--office-muted)}
+.v7-command-kbd{font-family:ui-monospace,monospace;font-size:9px;padding:3px 6px;border:1px solid #d7dfeb;border-radius:5px}
+.v7-floating{
+  position:fixed;right:18px;bottom:18px;z-index:80;width:46px;height:46px;border-radius:50%;
+  border:0;background:linear-gradient(145deg,#17366d,#2563eb);color:#fff;font-size:18px;
+  box-shadow:0 12px 28px rgba(37,99,235,.28);cursor:pointer
+}
+.v7-alert{
+  display:none;margin:0 0 12px;padding:11px 13px;border:1px solid #f2d69b;border-radius:12px;
+  background:#fff9e9;color:#7a5b0b;font-size:11px
+}
+.v7-alert.show{display:flex;justify-content:space-between;gap:10px;align-items:center}
+.v7-quick-stat{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin-top:10px}
+.v7-mini{padding:10px;border:1px solid var(--office-line);border-radius:11px;background:var(--office-bg)}
+.v7-mini b{display:block;font-size:16px;color:var(--office-navy)}.v7-mini span{font-size:9px;color:var(--office-muted)}
+body.mact-dark .mact-v7-toolbar{background:rgba(11,18,32,.92);border-color:#26334a}
+body.mact-dark .v7-chip,body.mact-dark .v7-command-box{background:#111b2e;color:#e8edf7;border-color:#26334a}
+body.mact-dark .v7-command-item:hover,body.mact-dark .v7-command-item.active{background:#182642}
+body.mact-dark .v7-command-kbd{border-color:#33425d}
+@media(max-width:760px){
+  .mact-v7-toolbar{top:57px;padding:8px 10px}.mact-v7-toolbar .v7-search{min-width:150px}
+  .v7-live{display:none}.v7-quick-stat{grid-template-columns:1fr 1fr}
+}
+@media(max-width:460px){.v7-quick-stat{grid-template-columns:1fr}.v7-floating{right:12px;bottom:12px}}
+</style>
+
+</head>
+<body>
+
+<div id="mactAuthGate" style="display:none;position:fixed;inset:0;z-index:99999;background:rgba(15,23,42,.94);align-items:center;justify-content:center;padding:20px">
+  <div style="width:min(430px,100%);background:#fff;border-radius:24px;padding:30px;box-shadow:0 25px 80px rgba(0,0,0,.35);text-align:center">
+    <div style="font-size:46px">⚖️</div>
+    <h2 style="margin:10px 0 6px;font-size:24px">MACT Legal Portal</h2>
+    <p style="color:#64748b;margin:0 0 22px">Sign in with Google to enable authenticated multi-device cloud sync.</p>
+    <div id="mactGoogleButton" style="display:flex;justify-content:center"></div>
+    <button id="mactGoogleLogin" type="button" style="width:100%;margin-top:14px;border:0;border-radius:12px;padding:13px 16px;background:#2563eb;color:#fff;font-weight:700;cursor:pointer">Continue with Google</button>
+    <div id="mactAuthError" style="display:none;color:#b91c1c;margin-top:14px;font-size:13px"></div>
+    <small style="display:block;color:#94a3b8;margin-top:18px">Local data remains available until cloud login is configured.</small>
+  </div>
+</div>
+<div id="mactUserBar" style="display:none;position:fixed;right:16px;bottom:16px;z-index:5000;background:rgba(15,23,42,.96);color:#fff;border-radius:14px;padding:9px 12px;box-shadow:0 8px 30px rgba(0,0,0,.25);align-items:center;gap:9px;font-size:12px">
+  <img id="mactUserPhoto" alt="" style="width:28px;height:28px;border-radius:50%;object-fit:cover;display:none">
+  <span id="mactUserName"></span>
+  <span id="mactCloudState" style="opacity:.7">●</span>
+  <button id="mactGoogleLogout" type="button" style="border:0;background:#334155;color:#fff;border-radius:8px;padding:6px 9px;cursor:pointer">Sign out</button>
+</div>
+
+<aside class="mact-sidebar"><div class="mact-brand"><div class="mact-brand-icon">⚖</div><div><strong>MACT Advocate Office</strong><small>Case Management Suite</small></div></div><nav class="mact-nav"><div class="mact-nav-label">Workspace</div><button type="button" class="active" onclick="mactGo('dashboard')"><span class="ico">⌂</span>Dashboard</button><button type="button" onclick="mactGo('cases')"><span class="ico">▤</span>Case Files</button><button type="button" onclick="mactGo('hearings')"><span class="ico">◷</span>Hearings & Calendar</button><button type="button" onclick="mactGo('clients')"><span class="ico">♙</span>Clients / Claimants</button><div class="mact-nav-label" style="margin-top:12px">Tools</div><button type="button" onclick="mactOpen('generatePetitionBtn')"><span class="ico">§</span>Petitions</button><button type="button" onclick="mactOpen('documentsBtn')"><span class="ico">▧</span>Documents</button><button type="button" onclick="mactOpen('analyticsBtn')"><span class="ico">◒</span>Reports & Analytics</button><button type="button" onclick="mactOpen('backupBtn')"><span class="ico">⇩</span>Backup & Restore</button></nav><div class="mact-side-bottom"><div class="mact-user"><div class="mact-avatar">A</div><div><b style="font-size:11px">Advocate Workspace</b><small style="display:block;color:#91a0bc;font-size:9px">Offline-first office</small></div></div></div></aside><div class="mact-main">
+<!-- MACT V7 SMART WORKSPACE -->
+<div class="mact-v7-toolbar" id="mactV7Toolbar">
+  <input id="v7GlobalCommandSearch" class="search-box v7-search"
+         placeholder="⌕ Smart search / command (Ctrl+K)…" autocomplete="off">
+  <span class="v7-chip" id="v7DataChip"><i class="v7-dot"></i><span>Local data ready</span></span>
+  <span class="v7-chip" id="v7SaveChip">● Saved</span>
+  <span class="v7-live" id="v7Clock">--:--</span>
+</div>
+<div id="v7SmartAlert" class="v7-alert">
+  <span id="v7AlertText">You have hearings requiring attention.</span>
+  <button type="button" class="btn btn-light btn-sm" id="v7AlertAction">View Hearings</button>
+</div>
+<div class="v7-command" id="v7CommandPalette" aria-hidden="true">
+  <div class="v7-command-box" role="dialog" aria-modal="true" aria-label="Command palette">
+    <input id="v7CommandInput" placeholder="Type a command or search…" autocomplete="off">
+    <div class="v7-command-list" id="v7CommandList"></div>
+  </div>
+</div>
+<button type="button" class="v7-floating" id="v7FloatingBtn" title="Quick commands" aria-label="Quick commands">⌘</button>
+
+
+<header>
+ <div>
+  <h1>⚖️ MACT Legal Portal</h1>
+  <div style="font-size:12px;color:var(--secondary);margin-top:3px">
+   <span id="connectionStatus" class="status offline">● Offline</span>
+   <span id="syncStatus">☁ Local Mode</span> | 
+   <span id="lastSyncStatus">Last Sync: Never</span>
+   <span id="headerTodayBadge" class="header-today-badge" style="display:none"></span>
+  </div>
+ </div>
+ <div style="display:flex;gap:8px;flex-wrap:wrap">
+  <button type="button" class="btn btn-success" id="openNewFileModalBtn">➕ Add New File</button>
+  <button type="button" class="btn btn-warning" id="topAddDateBtn">📅 Add Hearing Date</button>
+  <button type="button" class="btn btn-light" id="googleLoginBtn">☁️ Cloud Sync</button>
+  <button type="button" class="btn btn-light" id="restoreCloudBtn">🔄 Restore Cloud</button>
+   <button type="button" class="btn btn-light" id="recycleBinBtn">🗑️ Recycle Bin</button>
+ </div>
+</header>
+
+<section id="dashboard" class="mact-dash-wrap mact-section-anchor">
+ <div class="mact-dash-head">
+  <div><div class="mact-eyebrow">Advocate Office Dashboard</div><div class="mact-dash-title">Good day, Counsel 👋</div><div class="mact-dash-sub">A professional command centre for MACT case files, hearings, clients and documents.</div></div>
+  <div class="mact-actions"><button type="button" class="mact-action primary" onclick="document.getElementById('openNewFileModalBtn').click()">＋ New Case</button><button type="button" class="mact-action gold" onclick="document.getElementById('topAddDateBtn').click()">＋ Hearing</button><button type="button" class="mact-action" onclick="mactToggleDark()">◐ Theme</button></div>
+ </div>
+ <div class="mact-kpis">
+  <div class="mact-kpi"><span class="mact-kpi-icon">▤</span><div class="mact-kpi-label">Total case files</div><div class="mact-kpi-value" id="dashTotal">0</div><div class="mact-kpi-meta">All active office records</div></div>
+  <div class="mact-kpi"><span class="mact-kpi-icon">◷</span><div class="mact-kpi-label">Today's hearings</div><div class="mact-kpi-value" id="dashToday">0</div><div class="mact-kpi-meta">Immediate attention</div></div>
+  <div class="mact-kpi"><span class="mact-kpi-icon">✓</span><div class="mact-kpi-label">Pending matters</div><div class="mact-kpi-value" id="dashPending">0</div><div class="mact-kpi-meta">Cases not disposed</div></div>
+  <div class="mact-kpi"><span class="mact-kpi-icon">§</span><div class="mact-kpi-label">Judgments</div><div class="mact-kpi-value" id="dashJudgments">0</div><div class="mact-kpi-meta">Judgment / award records</div></div>
+ </div>
+ <div class="mact-grid">
+  <div class="mact-dash-card mact-section-anchor" id="hearings"><div class="mact-card-head"><h3>Today's & Upcoming Hearings</h3><span>Next 7 matters</span></div><div id="dashHearings"></div></div>
+  <div class="mact-dash-card"><div class="mact-card-head"><h3>Case Status Overview</h3><span>Live records</span></div><div id="dashStatus"></div><div style="margin-top:15px"><div class="mact-card-head" style="margin-bottom:7px"><span>Office workload</span><span id="dashWorkload">0%</span></div><div class="mact-progress"><i id="dashWorkloadBar" style="width:0%"></i></div></div></div>
+ </div>
+ <div class="mact-grid">
+  <div class="mact-dash-card"><div class="mact-card-head"><h3>Quick Actions</h3><span>Common office tasks</span></div><div class="mact-quick-grid">
+   <div class="mact-quick" onclick="document.getElementById('openNewFileModalBtn').click()"><b>＋ Create case file</b><span>Open a new MACT record</span></div>
+   <div class="mact-quick" onclick="document.getElementById('topAddDateBtn').click()"><b>◷ Schedule hearing</b><span>Add next proceeding date</span></div>
+   <div class="mact-quick" onclick="mactGo('cases')"><b>⌕ Find a case</b><span>Search the complete register</span></div>
+   <div class="mact-quick" onclick="mactOpen('printFilteredRecordsBtn')"><b>▣ Print register</b><span>Print selected case list</span></div>
+  </div></div>
+  <div class="mact-dash-card"><div class="mact-card-head"><h3>Office Activity</h3><span>Case distribution</span></div><div class="mact-bars" id="dashBars"></div></div>
+ </div>
+</section>
+
+<div class="premium-welcome" style="margin:0 0 14px;padding:12px 15px;border:1px solid #dbe5f0;border-radius:14px;background:linear-gradient(100deg,rgba(255,255,255,.96),rgba(239,246,255,.92));box-shadow:0 5px 18px rgba(15,35,70,.05);display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div><strong style="color:#123b78;font-size:13px">⚖️ MACT Legal Workspace</strong><div style="font-size:11px;color:#64748b;margin-top:2px">Offline-first • Case records • Hearings • Documents • Backup • Analytics</div></div><div style="font-size:10px;color:#8a6a22;font-weight:700;background:#fff8e7;border:1px solid #eed9a3;padding:6px 9px;border-radius:999px">PROFESSIONAL EDITION</div></div>
+
+<div class="stats-grid">
+ <div class="stat-card">
+  <h3>Total Cases</h3>
+  <div class="value" id="totalCases">0</div>
+ </div>
+ <div class="stat-card">
+  <h3>Active Cases</h3>
+  <div class="value" id="activeCases">0</div>
+ </div>
+ <div class="stat-card">
+  <h3>Pending Hearings</h3>
+  <div class="value" id="pendingCases">0</div>
+ </div>
+ <div class="stat-card">
+  <h3>Judgments Passed</h3>
+  <div class="value" id="judgmentCases">0</div>
+ </div>
+</div>
+
+<div class="card" id="cases">
+ <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;flex-wrap:wrap;gap:10px">
+  <h2 style="margin:0;font-size:16px">📋 Case Records List</h2>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+   <button type="button" class="btn btn-light" id="addNewFieldBtn">⚙️ Add Custom Field</button>
+   <button type="button" class="btn btn-light" id="exportCsvBtn">📤 Export CSV</button>
+   <label class="btn btn-light" style="cursor:pointer;margin:0">
+    📥 Import CSV
+    <input type="file" id="importCsvInput" accept=".csv" hidden>
+   </label>
+   <button type="button" class="btn btn-light" id="editLayoutBtn">⚙️ Edit Layout</button>
+    <button type="button" class="btn btn-light" id="printFilteredRecordsBtn">🖨️ Print List</button>
+   <button type="button" class="btn btn-danger btn-sm" id="bulkDeleteBtn">🗑️ Delete Selected</button>
+  </div>
+ </div>
+ <input type="text" id="globalSearchInput" class="search-box" placeholder="🔍 Search records across all fields (Case Title, MACT No, Claimant, Vehicle, etc.)...  (Ctrl+K)">
+ <div style="overflow-x:auto">
+  <table>
+   <thead>
+    <tr>
+     <th style="width:30px"><input type="checkbox" id="selectAllCheckbox"></th>
+     <th>Case Title / ID</th>
+     <th>MACT No.</th>
+     <th>Claimant Name</th>
+     <th>Accident Date</th>
+     <th>Vehicle Details</th>
+     <th>Insurance Co.</th>
+     <th>Next Date</th>
+     <th>Status</th>
+     <th>Judgment PDF</th>
+     <th>Actions</th>
+    </tr>
+   </thead>
+   <tbody id="recordsTableBody">
+    <tr><td colspan="11" class="empty">No records found.</td></tr>
+   </tbody>
+  </table>
+ </div>
+</div>
+
+<div class="card">
+ <h2 style="margin:0 0 10px;font-size:16px">📅 Today & Upcoming Hearings (<span id="todayCount">0</span>)</h2>
+ <div id="hearingList" style="max-height:250px;overflow-y:auto"></div>
+ <div style="margin-top:10px">
+  <button type="button" class="btn btn-light btn-sm" id="printTodayHearingsBtn">🖨️ Print Hearing List</button>
+ </div>
+</div>
+
+<!-- NEW/EDIT RECORD MODAL -->
+<div class="modal" id="newFileModal">
+ <div class="modal-content">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px">
+   <h2 id="recordModalTitle" style="margin:0;font-size:18px">➕ Add New File Record <span id="draftIndicator" class="draft-indicator" style="display:none">• Draft saved</span></h2>
+   <div style="display:flex;gap:6px"><button type="button" class="btn btn-light btn-sm" id="toggleRecordModalSizeBtn">⛶ Maximize</button><button type="button" class="btn btn-light btn-sm" data-close="newFileModal">✕ Close</button></div>
+  </div>
+  <form id="newFileForm">
+   <div id="formSections"></div>
+   <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:20px">
+    <button type="button" class="btn btn-light" data-close="newFileModal">Cancel</button>
+    <button type="submit" class="btn btn-success">💾 Save Record</button>
+   </div>
+  </form>
+ </div>
+</div>
+
+<!-- DETAIL VIEW MODAL -->
+<div class="modal" id="fileDetailModal">
+ <div class="modal-content">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px">
+   <h2 style="margin:0;font-size:18px">🔍 Case File Details</h2>
+   <div style="display:flex;gap:8px">
+    <button type="button" class="btn btn-primary btn-sm" id="editCurrentRecordBtn">✏️ Edit</button>
+    <button type="button" class="btn btn-warning btn-sm" id="quickAddHearingBtn">📅 Add Hearing</button>
+    <button type="button" class="btn btn-light btn-sm" id="generatePetitionBtn">⚖️ Generate Petition</button>
+     <button type="button" class="btn btn-light btn-sm" id="printCurrentRecordBtn">🖨️ Print</button>
+    <button type="button" class="btn btn-light btn-sm" data-close="fileDetailModal">✕ Close</button>
+   </div>
+  </div>
+  <div id="fileDetailBody"></div>
+ </div>
+</div>
+
+<!-- ADD HEARING DATE MODAL -->
+<div class="modal" id="addDateModal">
+ <div class="modal-content" style="max-width:500px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px">
+   <h2 style="margin:0;font-size:18px">📅 Add Hearing / Proceeding Date</h2>
+   <button type="button" class="btn btn-light btn-sm" data-close="addDateModal">✕ Close</button>
+  </div>
+  <form id="addDateForm">
+   <div class="field" style="margin-bottom:12px">
+    <label>Select Case Record</label>
+    <input type="text" id="hearingRecordSearch" placeholder="Filter cases..." style="margin-bottom:5px">
+    <select id="hearingRecordSelect" required style="max-height:120px"></select>
+   </div>
+   <div class="field" style="margin-bottom:12px">
+    <label>Proceeding Date</label>
+    <input type="date" id="newProceedingDate">
+   </div>
+   <div class="field" style="margin-bottom:12px">
+    <label>Next Hearing Date</label>
+    <input type="date" id="newNextDate" required>
+   </div>
+   <div class="field" style="margin-bottom:15px">
+    <label>Proceeding Notes / Purpose</label>
+    <textarea id="newProceedingNotes" placeholder="Enter notes or hearing purpose..."></textarea>
+   </div>
+   <div style="display:flex;justify-content:flex-end;gap:10px">
+    <button type="button" class="btn btn-light" data-close="addDateModal">Cancel</button>
+    <button type="submit" class="btn btn-success">Save Hearing</button>
+   </div>
+  </form>
+ </div>
+</div>
+
+<!-- CUSTOM FIELD MODAL -->
+<div class="modal" id="customFieldModal">
+ <div class="modal-content" style="max-width:450px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px">
+   <h2 style="margin:0;font-size:18px">⚙️ Add Custom Field</h2>
+   <button type="button" class="btn btn-light btn-sm" data-close="customFieldModal">✕ Close</button>
+  </div>
+  <form id="customFieldForm">
+   <div class="field" style="margin-bottom:12px">
+    <label>Target Section</label>
+    <select id="cfSectionIndex">
+     <option value="0">1. CASE / FILE / ACCOUNT INFORMATION</option>
+     <option value="1">2. CLAIMANT / PERSONAL INFORMATION</option>
+     <option value="2">3. ACCIDENT / FIR / VEHICLE / INVESTIGATION</option>
+     <option value="3">4. ADVOCATES / REPRESENTATION</option>
+     <option value="4">5. DOCUMENTS / MEDICAL / DISABILITY</option>
+     <option value="5">6. PROCEEDINGS / CLAIMS / COMPROMISE / APPEAL / FINAL STATUS</option>
+    </select>
+   </div>
+   <div class="field" style="margin-bottom:12px">
+    <label>Field Label Name</label>
+    <input type="text" id="cfLabel" required placeholder="e.g. Special Notes">
+   </div>
+   <div class="field" style="margin-bottom:12px">
+    <label>Field Type</label>
+    <select id="cfType">
+     <option value="text">Text (Single Line)</option>
+     <option value="textarea">Textarea (Multiline)</option>
+     <option value="date">Date</option>
+     <option value="number">Number</option>
+     <option value="select">Dropdown Select</option>
+    </select>
+   </div>
+   <div class="field" id="cfOptionsField" style="margin-bottom:15px;display:none">
+    <label>Dropdown Options (Comma separated)</label>
+    <input type="text" id="cfOptions" placeholder="Option 1, Option 2, Option 3">
+   </div>
+   <div style="display:flex;justify-content:flex-end;gap:10px">
+    <button type="button" class="btn btn-light" data-close="customFieldModal">Cancel</button>
+    <button type="submit" class="btn btn-primary">Create Field</button>
+   </div>
+  </form>
+ </div>
+</div>
+
+
+
+<!-- ===== ADVANCED FEATURES UI ===== -->
+<div class="card" id="advancedControlCard">
+ <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+  <h2 style="margin:0;font-size:16px">🚀 Advanced Case Management</h2>
+  <span class="adv-muted" id="advancedResultInfo">Advanced tools active</span>
+ </div>
+ <div class="adv-toolbar">
+  <button type="button" class="btn btn-light" id="toggleFiltersBtn">🔎 Advanced Filters</button>
+  <button type="button" class="btn btn-light" id="bulkEditBtn">✏️ Bulk Edit</button>
+  <button type="button" class="btn btn-light" id="duplicatesBtn">♻️ Find Duplicates</button>
+  <button type="button" class="btn btn-light" id="backupBtn">💾 Backup / Restore</button>
+  <button type="button" class="btn btn-light" id="caseAnalyticsBtn">📊 Analytics</button>
+  <button type="button" class="btn btn-light" id="enableNotificationsBtn">🔔 Hearing Alerts</button><button type="button" class="btn btn-light" id="securityBtn">🔐 App Lock</button>
+ </div>
+ <div class="adv-panel" id="advancedFiltersPanel" hidden>
+  <div class="form-grid">
+   <div class="field"><label>Status</label><select id="filterStatus"><option value="">All Status</option><option>Active</option><option>Pending</option><option>Closed</option><option>Disposed</option></select></div>
+   <div class="field"><label>Accident Type</label><select id="filterAccident"><option value="">All Types</option><option>INJURY</option><option>FATAL</option><option>PROPERTY DAMAGE</option></select></div>
+   <div class="field"><label>Vehicle Type</label><select id="filterVehicle"><option value="">All Vehicles</option><option>Motor Cycle</option><option>Car</option><option>Truck</option><option>Bus</option><option>Auto Rickshaw</option><option>Tractor</option><option>Tempo</option><option>Unknown</option></select></div>
+   <div class="field"><label>Insurance Company</label><input id="filterInsurance" placeholder="Contains..."></div>
+   <div class="field"><label>Accident From</label><input id="filterAccidentFrom" type="date"></div>
+   <div class="field"><label>Accident To</label><input id="filterAccidentTo" type="date"></div>
+   <div class="field"><label>Hearing</label><select id="filterHearing"><option value="">Any Hearing</option><option value="today">Today</option><option value="7">Next 7 Days</option><option value="30">Next 30 Days</option><option value="overdue">Overdue</option><option value="none">No Upcoming Hearing</option></select></div>
+   <div class="field"><label>Priority</label><select id="filterPriority"><option value="">All Priorities</option><option>Normal</option><option>Important</option><option>Urgent</option><option>High Priority</option></select></div>
+   <div class="field"><label>Judgment PDF</label><select id="filterPdf"><option value="">Any</option><option value="yes">Attached</option><option value="no">Missing</option></select></div>
+  </div>
+  <div class="adv-toolbar">
+   <button type="button" class="btn btn-success" id="applyFiltersBtn">Apply</button><button type="button" class="btn btn-light" id="clearFiltersBtn">Clear</button>
+  </div>
+ </div>
+ <div class="adv-toolbar">
+  <label style="display:flex;align-items:center;gap:5px">Sort <select id="sortRecords"><option value="updated_desc">Recently Updated</option><option value="next_asc">Next Hearing</option><option value="accident_desc">Accident Date ↓</option><option value="accident_asc">Accident Date ↑</option><option value="case_asc">Case A-Z</option><option value="case_desc">Case Z-A</option><option value="mact_asc">MACT No. A-Z</option></select></label>
+  <label style="display:flex;align-items:center;gap:5px">Rows <select id="pageSize"><option>10</option><option selected>25</option><option>50</option><option>100</option></select></label>
+  <button type="button" class="btn btn-light" id="selectVisibleBtn">☑️ Select Visible</button>
+  <button type="button" class="btn btn-light" id="clearSelectionBtn">☐ Clear Selection</button>
+ </div>
+ <div class="adv-muted" id="filterSummary"></div>
+ <div class="adv-pagination" id="advancedPagination"></div>
+</div>
+
+<!-- BULK EDIT -->
+<div class="modal" id="bulkEditModal"><div class="modal-content" style="max-width:600px">
+ <div style="display:flex;justify-content:space-between;align-items:center"><h2 style="margin:0;font-size:18px">✏️ Bulk Edit Selected Cases</h2><button type="button" class="btn btn-light" data-close="bulkEditModal">✕</button></div>
+ <p class="adv-help" id="bulkEditCount">0 records selected.</p>
+ <form id="bulkEditForm">
+  <div class="form-grid">
+   <div class="field"><label>Final Status</label><select id="bulkFinalStatus"><option value="">— Keep Existing —</option><option>Active</option><option>Pending</option><option>Closed</option><option>Disposed</option></select></div>
+   <div class="field"><label>Importance</label><select id="bulkImportance"><option value="">— Keep Existing —</option><option>Normal</option><option>Important</option><option>Urgent</option><option>High Priority</option></select></div>
+   <div class="field"><label>Insurance Company</label><input id="bulkInsurance" placeholder="Leave blank to keep existing"></div>
+   <div class="field"><label>Our Side Representation</label><input id="bulkRepresentation" placeholder="Leave blank to keep existing"></div>
+  </div>
+  <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:15px"><button type="button" class="btn btn-light" data-close="bulkEditModal">Cancel</button><button type="button" class="btn btn-success">Apply Changes</button></div>
+ </form>
+</div></div>
+
+<!-- BACKUP -->
+<div class="modal" id="backupModal"><div class="modal-content" style="max-width:650px">
+ <div style="display:flex;justify-content:space-between;align-items:center"><h2 style="margin:0;font-size:18px">💾 Backup & Restore Center</h2><button type="button" class="btn btn-light" data-close="backupModal">✕</button></div>
+ <div class="adv-kpis"><div class="adv-kpi"><b id="backupCount">0</b><span>Records</span></div><div class="adv-kpi"><b id="backupSize">0 KB</b><span>Estimated JSON</span></div><div class="adv-kpi"><b id="backupLast">Never</b><span>Last Local Backup</span></div></div>
+ <div class="adv-panel"><strong>Download</strong><p class="adv-help">Create a complete local JSON backup. It includes records, proceedings, custom fields and audit information.</p><button type="button" class="btn btn-success" id="downloadJsonBackupBtn">⬇️ Download JSON Backup</button> <button type="button" class="btn btn-light" id="downloadCsvAdvancedBtn">📊 Download CSV</button></div>
+ <div class="adv-panel"><strong>Restore</strong><p class="adv-help">Restore adds/updates records by Record ID. It does not silently erase your current records.</p><input type="file" id="restoreJsonInput" accept="application/json,.json"><div style="margin-top:8px"><button type="button" class="btn btn-warning" id="restoreJsonBtn">♻️ Restore JSON</button></div></div>
+ <div class="adv-panel"><strong>Safety</strong><div class="adv-help">Before destructive operations, download a backup. Existing CSV import/export remains available above.</div></div>
+</div></div>
+
+<!-- DUPLICATES -->
+<div class="modal" id="duplicatesModal"><div class="modal-content adv-modal-wide">
+ <div style="display:flex;justify-content:space-between;align-items:center"><h2 style="margin:0;font-size:18px">♻️ Duplicate Case Finder</h2><button type="button" class="btn btn-light" data-close="duplicatesModal">✕</button></div>
+ <p class="adv-help">Possible duplicates are grouped by MACT No., File Number, or Vehicle + Accident Date. Review before deleting anything.</p>
+ <div id="duplicatesBody"></div>
+</div></div>
+
+<!-- ANALYTICS -->
+<div class="modal" id="analyticsModal"><div class="modal-content adv-modal-wide">
+ <div style="display:flex;justify-content:space-between;align-items:center"><h2 style="margin:0;font-size:18px">📊 Case Analytics</h2><button type="button" class="btn btn-light" data-close="analyticsModal">✕</button></div>
+ <div id="analyticsBody"></div>
+</div></div>
+
+<!-- DOCUMENT MANAGER -->
+<div class="modal" id="documentsModal"><div class="modal-content adv-modal-wide">
+ <div style="display:flex;justify-content:space-between;align-items:center"><h2 style="margin:0;font-size:18px">📁 Case Document Manager</h2><button type="button" class="btn btn-light" data-close="documentsModal">✕</button></div>
+ <div id="documentsCaseTitle" class="adv-help"></div>
+ <div class="adv-panel"><label>Add Document</label><input type="file" id="caseDocumentInput"><div class="adv-help">For reliability, individual documents are limited to 2 MB. PDFs, images and common office files can be stored locally and synced as part of the case record.</div><button type="button" class="btn btn-success" id="addCaseDocumentBtn" style="margin-top:7px">＋ Add Document</button></div>
+ <div id="documentsList"></div>
+</div></div>
+
+<!-- PROCEEDING EDITOR -->
+<div class="modal" id="proceedingEditModal"><div class="modal-content" style="max-width:600px">
+ <div style="display:flex;justify-content:space-between;align-items:center"><h2 style="margin:0;font-size:18px">✏️ Edit Proceeding</h2><button type="button" class="btn btn-light" data-close="proceedingEditModal">✕</button></div>
+ <form id="proceedingEditForm"><input type="hidden" id="editingProceedingIndex"><div class="form-grid">
+  <div class="field"><label>Proceeding Date</label><input type="date" id="editPDate"></div><div class="field"><label>Next Date</label><input type="date" id="editPNext"></div><div class="field full"><label>Notes / Purpose</label><textarea id="editPNotes"></textarea></div>
+ </div><div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px"><button type="button" class="btn btn-light" data-close="proceedingEditModal">Cancel</button><button type="button" class="btn btn-success">Save Proceeding</button></div></form>
+</div></div>
+
+
+<div class="modal" id="securityModal"><div class="modal-content" style="max-width:520px">
+ <div style="display:flex;justify-content:space-between;align-items:center"><h2 style="margin:0;font-size:18px">🔐 App Lock</h2><button type="button" class="btn btn-light" data-close="securityModal">✕</button></div>
+ <p class="adv-help">This is a local browser UI lock. It is not encryption and should not be treated as a substitute for account/device security.</p>
+ <div class="adv-panel"><strong>Set / Change PIN</strong><div class="form-grid" style="margin-top:8px"><div class="field"><label>New 4–8 digit PIN</label><input id="newPin" inputmode="numeric" maxlength="8" type="password"></div><div class="field"><label>Confirm PIN</label><input id="confirmPin" inputmode="numeric" maxlength="8" type="password"></div></div><button type="button" class="btn btn-success" id="savePinBtn" style="margin-top:8px">Save PIN</button> <button type="button" class="btn btn-danger" id="removePinBtn">Remove Lock</button></div>
+ <div class="adv-panel"><strong>Current status: </strong><span id="lockStatus">Checking…</span></div>
+</div></div>
+<div class="modal" id="pinUnlockModal"><div class="modal-content" style="max-width:400px;text-align:center"><h2 style="margin-top:0">🔒 MACT Portal Locked</h2><p class="adv-help">Enter your local PIN to continue.</p><input id="unlockPin" inputmode="numeric" type="password" maxlength="8" style="text-align:center;font-size:22px;letter-spacing:6px"><button type="button" class="btn btn-success" id="unlockBtn" style="margin-top:10px">Unlock</button><div id="unlockMsg" class="adv-danger-text" style="margin-top:8px"></div></div></div>
+
+<!-- RECYCLE BIN -->
+<div class="modal" id="recycleBinModal">
+ <div class="modal-content adv-modal-wide">
+  <div style="display:flex;justify-content:space-between;align-items:center">
+   <h2 style="margin:0;font-size:18px">🗑️ Recycle Bin</h2>
+   <button type="button" class="btn btn-light" data-close="recycleBinModal">✕ Close</button>
+  </div>
+  <p class="adv-help">Deleted cases are retained as cloud tombstones. Restore them here or use Restore Cloud to recover deleted cloud records.</p>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0">
+   <button type="button" class="btn btn-success" id="restoreAllTrashBtn">♻️ Restore All</button>
+   <button type="button" class="btn btn-danger" id="emptyTrashBtn">🗑️ Empty Local Trash</button>
+  </div>
+  <div id="recycleBinBody"></div>
+ </div>
+</div>
+
+
+<!-- FIELD / MODULE LAYOUT EDITOR -->
+<div class="modal" id="layoutEditorModal">
+ <div class="modal-content adv-modal-wide">
+  <div style="display:flex;justify-content:space-between;align-items:center">
+   <h2 style="margin:0;font-size:18px">⚙️ Edit Layout & File Record Modules</h2>
+   <button type="button" class="btn btn-light" data-close="layoutEditorModal">✕ Close</button>
+  </div>
+  <p class="adv-help">Select which modules and fields appear in Add/Edit Record. Drag-and-drop field ordering remains available inside the record form.</p>
+  <div id="layoutEditorBody"></div>
+  <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
+   <button type="button" class="btn btn-light" id="resetLayoutBtn">↺ Reset Layout</button>
+   <button type="button" class="btn btn-success" id="saveLayoutEditorBtn">💾 Save Layout</button>
+  </div>
+ </div>
+</div>
+
+<!-- PRINT FIELD SELECTOR -->
+<div class="modal" id="printFieldsModal">
+ <div class="modal-content adv-modal-wide">
+  <div style="display:flex;justify-content:space-between;align-items:center">
+   <h2 style="margin:0;font-size:18px">🖨️ Select Fields to Print</h2>
+   <button type="button" class="btn btn-light" data-close="printFieldsModal">✕ Close</button>
+  </div>
+  <div class="adv-toolbar" style="margin-top:12px">
+   <button type="button" class="btn btn-light btn-sm" id="printSelectAllBtn">☑️ Select All</button>
+   <button type="button" class="btn btn-light btn-sm" id="printClearAllBtn">☐ Clear All</button>
+  </div>
+  <div id="printFieldsBody"></div>
+  <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
+   <button type="button" class="btn btn-light" data-close="printFieldsModal">Cancel</button>
+   <button type="button" class="btn btn-success" id="confirmPrintFieldsBtn">🖨️ Print Selected</button>
+  </div>
+ </div>
+</div>
+
+<!-- HEARING PRINT COLUMN SELECTOR -->
+<div class="modal" id="hearingPrintFieldsModal">
+ <div class="modal-content adv-modal-wide">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+   <div><h2 style="margin:0;font-size:18px">🖨️ Hearing List Print Settings</h2><div class="adv-help" style="margin:4px 0 0">Choose columns and set the exact order in which they will appear on the printed hearing list.</div></div>
+   <button type="button" class="btn btn-light" data-close="hearingPrintFieldsModal">✕ Close</button>
+  </div>
+  <div class="adv-toolbar" style="margin-top:12px">
+   <button type="button" class="btn btn-light btn-sm" id="hearingPrintSelectAllBtn">☑️ Select All</button>
+   <button type="button" class="btn btn-light btn-sm" id="hearingPrintResetBtn">↺ Reset</button>
+   <span style="font-size:11px;color:#64748b;margin-left:auto">Drag rows or use ↑ ↓ to change order</span>
+  </div>
+  <div id="hearingPrintFieldsBody" class="hearing-print-order"></div>
+  <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
+   <button type="button" class="btn btn-light" data-close="hearingPrintFieldsModal">Cancel</button>
+   <button type="button" class="btn btn-success" id="confirmHearingPrintBtn">🖨️ Print Hearing List</button>
+  </div>
+ </div>
+</div>
+
+<!-- PETITION GENERATOR -->
+<div class="modal" id="petitionModal">
+ <div class="modal-content adv-modal-wide">
+  <div style="display:flex;justify-content:space-between;align-items:center">
+   <h2 style="margin:0;font-size:18px">⚖️ MACT Petition Generator</h2>
+   <button type="button" class="btn btn-light" data-close="petitionModal">✕ Close</button>
+  </div>
+  <div class="petition-toolbar">
+   <select id="petitionType">
+    <option value="166">Claim Petition — Section 166 MV Act</option>
+    <option value="140">Claim Petition — Section 140 MV Act</option>
+    <option value="163A">Claim Petition — Section 163A MV Act</option>
+   </select>
+   <button type="button" class="btn btn-light" id="regeneratePetitionBtn">↻ Regenerate</button>
+   <button type="button" class="btn btn-success" id="printPetitionBtn">🖨️ Print Petition</button>
+  </div>
+  <div class="adv-help" id="petitionSourceInfo"></div>
+  <textarea id="petitionText"></textarea>
+ </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz1QqqZb6Pd95CkUmC8YcYbI3JXo7BES-9zae6f6Ay7bvmKAwrrzJbjIByGD1zXvAzI/exec";
+
+const STORAGE_KEY = "mact_unlimited_records";
+const LAYOUT_STORAGE_KEY = "mact_form_sections_layout";
+const CUSTOM_FIELDS_KEY = "mact_custom_fields_def";
+const FIELD_VISIBILITY_KEY = "mact_field_visibility_v1";
+const PRINT_FIELDS_KEY = "mact_print_fields_v1";
+const PDF_MAX_MB = 5;
+const DRAFT_KEY = "mact_form_draft_v1";
+
+let records = [];
+let currentRecordId = null;
+let editingRecordId = null;
+let cloudConnected = false;
+let syncBusy = false;
+let cloudTimer = null;
+let searchDebounceTimer = null;
+
+const defaultSections = [
+{
+ title:"1. CASE / FILE / ACCOUNT INFORMATION",
+ fields:[
+  ["caseTitle","Case Title","text","full"],
+  ["mactNo","MACT No.","text"],
+  ["fileNumber","File Number","text"],
+  ["courtName","Court Name","text"],
+  ["sections","Sections","select",["166 MV ACT", "140 MV ACT", "163A MV ACT", "OTHER"]],
+  ["accidentType","Accident Type","select",["INJURY", "FATAL", "PROPERTY DAMAGE"]],
+  ["filingYear","Filing Year","number"],
+  ["filingMonth","Filing Month","select",["January","February","March","April","May","June","July","August","September","October","November","December"]],
+  ["caseGivenBy","Case Given By","text"],
+  ["clientFromOtherAdv","Client From Other Advocate","text"],
+  ["importanceLevel","Importance Level","select",["Normal", "Important", "Urgent", "High Priority"]],
+  ["presentation","Presentation","text"],
+  ["accountName","Account Name","text"],
+  ["accountType","Account Type","select",["Savings", "Current", "MACT Account", "Fixed Deposit"]],
+  ["accountSite","Account Site","text"],
+  ["cifNumber","CIF Number","text"],
+  ["accountsNumbers","Accounts Numbers","text"],
+  ["accountNumberDup","Account Number Duplicate","text"],
+  ["accountHolderName","Account Holder Name","text"],
+  ["ifscCode","IFSC Code","text"],
+  ["bankName","Bank Name","text"],
+  ["bankBranchName","Bank Branch Name","text"],
+  ["allClaimantsAccountDetail","All Claimants Account Detail","textarea","full"],
+  ["hpoAccountClosed","HPO Account Closed","select",["NO", "YES"]],
+  ["ifscHpoIppb","IFSC HPO / IPPB","text"],
+  ["hpoIppbBranchName","HPO / IPPB Branch Name","text"]
+ ]
+},
+{
+ title:"2. CLAIMANT / PERSONAL INFORMATION",
+ fields:[
+  ["claimantName","Claimant Name","text"],
+  ["fatherName","Father / Husband Name","text"],
+  ["age","Age","number"],
+  ["income","Income","text"],
+  ["occupation","Occupation","text"],
+  ["religion","Religion","text"],
+  ["village","Village","text"],
+  ["town","Town","text"],
+  ["tehsil","Tehsil","text"],
+  ["block","Block","text"],
+  ["psAccident","Police Station of Accident","text"],
+  ["district","District","text"],
+  ["otherDistricts","Other Districts","text"],
+  ["state","State","text"],
+  ["email","Email","email"],
+  ["mobile","Mobile","tel"],
+  ["mobile2","Mobile 2","tel"],
+  ["mobile1","Mobile 1","tel"],
+  ["mobileNum2","Mobile Number 2","tel"],
+  ["mobile3","Mobile 3","tel"],
+  ["mobileNumGen","Mobile Number General","tel"],
+  ["otherAddress","Other Address","textarea","full"],
+  ["isIncomeTaxPayee","Income Tax Payee","select",["NO", "YES"]]
+ ]
+},
+{
+ title:"3. ACCIDENT / FIR / VEHICLE / INVESTIGATION",
+ fields:[
+  ["accidentDate","Accident Date","date"],
+  ["crimeNo","Crime No.","text"],
+  ["firOrGd","FIR / GD","select",["FIR", "GD", "Both"]],
+  ["gd","GD","text"],
+  ["fir","FIR","text"],
+  ["fr","FR","text"],
+  ["vehicleNo","Vehicle Number","text"],
+  ["vehicleType","Vehicle Type","select",["Motor Cycle", "Car", "Truck", "Bus", "Auto Rickshaw", "Tractor", "Tempo", "Unknown"]],
+  ["ownerName","Owner Name","text"],
+  ["insuranceCo","Insurance Company","text"],
+  ["insuranceDetails","Insurance Details","textarea","full"],
+  ["driverName","Driver Name","text"],
+  ["ioDetails","IO Details","textarea"],
+  ["otherInvestigatorsDetail","Other Investigators Detail","textarea"],
+  ["investigatorName","Investigator Name","text"]
+ ]
+},
+{
+ title:"4. ADVOCATES / REPRESENTATION",
+ fields:[
+  ["claimantCouncil","Claimant Council","text"],
+  ["ownerAdvocate","Owner Advocate","text"],
+  ["driverAdvocate","Driver Advocate","text"],
+  ["insuranceAdvocate","Insurance Advocate","text"],
+  ["hcAdvocateName","HC Advocate Name","text"],
+  ["ourSideRepresentation","Our Side Representation","text"],
+  ["executives","Executives","textarea","full"]
+ ]
+},
+{
+ title:"5. DOCUMENTS / MEDICAL / DISABILITY",
+ fields:[
+  ["photoCopyStatus","Photo Copy Status","select",["Pending", "Received", "Complete"]],
+  ["fileStatusComplete","File Status Complete","select",["NO", "YES"]],
+  ["certifiedCopiesStatus","Certified Copies Status","select",["Pending", "Applied", "Received"]],
+  ["regCertificate","Registration Certificate","select",["Available", "Not Available", "Verified"]],
+  ["drivingLicense","Driving License","select",["Valid", "Invalid", "Fake", "Not Available"]],
+  ["permit","Permit","select",["Valid", "Invalid", "Not Available"]],
+  ["fitness","Fitness","select",["Valid", "Invalid", "Not Available"]],
+  ["insuranceDoc","Insurance Document","select",["Valid", "Fake", "Not Available"]],
+  ["pollution","Pollution","select",["Valid", "Invalid", "Not Available"]],
+  ["bailOrder","Bail Order","select",["Available", "Not Available"]],
+  ["releaseOrder","Release Order","select",["Available", "Not Available"]],
+  ["chargeSheet","Charge Sheet","select",["Submitted", "Pending"]],
+  ["injuryReport","Injury Report","select",["Available", "Not Available"]],
+  ["punchnama","Punchnama","select",["Available", "Not Available"]],
+  ["postMortem","Post Mortem","select",["Available", "Not Available"]],
+  ["sitePlan","Site Plan","select",["Available", "Not Available"]],
+  ["disabilityPercentage","Disability Percentage","text"],
+  ["disabilityNature","Disability Nature","text"],
+  ["disabilityCertificate","Disability Certificate","select",["Available", "Not Available"]],
+  ["disabilityCertNoDob","Disability Cert No / DOB","text"],
+  ["disabilityValidityFrom","Disability Validity From","date"],
+  ["disabilityValidityTill","Disability Validity Till","date"],
+  ["medicalBillsExpenses","Medical Bills / Expenses","textarea","full"],
+  ["verifiedMedicalBills","Verified Medical Bills","text"]
+ ]
+},
+{
+ title:"6. PROCEEDINGS / CLAIMS / COMPROMISE / APPEAL / FINAL STATUS",
+ fields:[
+  ["issueFramedDate","Issue Framed Date","date"],
+  ["kbFilingDate","KB Filing Date","date"],
+  ["protestFilingDate","Protest Filing Date","date"],
+  ["lowerCourtProtest","Lower Court Protest","text"],
+  ["isProtestPending","Is Protest Pending","select",["NO", "YES"]],
+  ["miscNoProtest","Misc No. Protest","text"],
+  ["nextDateProtest","Next Date Protest","date"],
+  ["rplyFilingDate","Reply Filing Date","date"],
+  ["rplyNotes","Reply Notes","textarea","full"],
+  ["paFilingDate","PA Filing Date","date"],
+  ["licInsFilingDate","LIC Insurance Filing Date","date"],
+  ["bankClaimFilingDate","Bank Claim Filing Date","date"],
+  ["esFilingDate","E-S Filing Date","date"],
+  ["atmClaimFilingDate","ATM Claim Filing Date","date"],
+  ["labourCardFilingDate","Labour Card Filing Date","date"],
+  ["compromiseFilingDate","Compromise Filing Date","date"],
+  ["compromiseStatus","Compromise Status","select",["Pending", "Compromised", "Failed"]],
+  ["suggestLokAdalat","Suggest Lok Adalat","select",["NO", "YES"]],
+  ["lokAdalatDocStatus","Lok Adalat Document Status","text"],
+  ["lokAdalatDocsReq","Lok Adalat Documents Required","textarea","full"],
+  ["atmClaim","ATM Claim","select",["NO", "YES"]],
+  ["bankClaim","Bank Claim","select",["NO", "YES"]],
+  ["eShram","E-Shram","select",["NO", "YES"]],
+  ["licInsurance","LIC Insurance","select",["NO", "YES"]],
+  ["paOwnerDriver","PA Owner / Driver","select",["NO", "YES"]],
+  ["labourCard","Labour Card","select",["NO", "YES"]],
+  ["kisanBima","Kisan Bima","select",["NO", "YES"]],
+  ["advanceGivenYesNo","Advance Given Yes / No","select",["NO", "YES"]],
+  ["advanceGivenDetails","Advance Given Details","textarea","full"],
+  ["compensationAmount","Compensation Amount","text"],
+  ["monthCompromise","Month Compromise","text"],
+  ["yearCompromise","Year Compromise","number"],
+  ["dateJudgementCompromise","Date Judgment / Compromise","date"],
+  ["bankCompromiseReceived","Bank Compromise Received","select",["NO", "YES"]],
+  ["ddRestoredDate","DD Restored Date","date"],
+  ["judgementStatus","Judgment Status","select",["Pending", "Judgment Passed", "Compromised", "Dismissed"]],
+  ["finalStatus","Final Status","select",["Active", "Pending", "Closed", "Disposed"]],
+  ["hcAppealStatus","HC Appeal Status","select",["None", "Filed", "Pending", "Decided"]],
+  ["fafoNumber","FAFO Number","text"],
+  ["hcAppealBrief","HC Appeal Brief","textarea","full"],
+  ["appealCaveatDate","Appeal Caveat Date","date"],
+  ["enrichStatus","Enrich Status","text"],
+  ["connectedToModule","Connected To Module","text"],
+  ["connectedToId","Connected To ID","text"],
+  ["lastActivityTime","Last Activity Time","text"],
+  ["lastEnrichedTime","Last Enriched Time","text"],
+  ["changeLogTime","Change Log Time","text"],
+  ["locked","Locked","select",["NO", "YES"]],
+  ["description","Description","textarea","full"],
+  ["othersNotes","Others Notes","textarea","full"]
+ ]
+}
+];
+
+let sections = JSON.parse(JSON.stringify(defaultSections));
+
+function loadSavedLayout(){
+ try{
+  const saved = localStorage.getItem(LAYOUT_STORAGE_KEY);
+  if(saved){
+   const parsed = JSON.parse(saved);
+   if(Array.isArray(parsed) && parsed.length === defaultSections.length){
+    sections = parsed;
+   }
+  }
+ }catch(e){}
+}
+
+function saveLayout(){
+ localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(sections));
+}
+
+function loadCustomFields(){
+ try{
+  const raw = localStorage.getItem(CUSTOM_FIELDS_KEY);
+  if(raw){
+   const list = JSON.parse(raw);
+   if(Array.isArray(list)){
+    list.forEach(cf=>{
+     const targetSec = sections[cf.sectionIndex] || sections[0];
+     if(!targetSec.fields.some(f=>f[0]===cf.id)){
+      targetSec.fields.push([cf.id, cf.label, cf.type, cf.options]);
+     }
+    });
+   }
+  }
+ }catch(e){}
+}
+
+loadSavedLayout();
+loadCustomFields();
+
+function getAllFieldIds(){
+ return sections.flatMap(s => s.fields.map(f => f[0]));
+}
+
+const defaults = {
+ sections:"166 MV ACT",
+ accidentType:"INJURY",
+ district:"Bareilly",
+ state:"Uttar Pradesh",
+ vehicleType:"Motor Cycle",
+ locked:"NO"
+};
+
+function $(id){ return document.getElementById(id); }
+
+function escapeHtml(value){
+ const div = document.createElement("div");
+ div.textContent = value == null ? "" : String(value);
+ return div.innerHTML;
+}
+
+function localDate(){
+ const d = new Date();
+ const y = d.getFullYear();
+ const m = String(d.getMonth() + 1).padStart(2, "0");
+ const day = String(d.getDate()).padStart(2, "0");
+ return `${y}-${m}-${day}`;
+}
+
+function formatDate(value){
+ if(!value) return "";
+ const s = String(value);
+ if(/^\d{4}-\d{2}-\d{2}$/.test(s)){
+  const [y, m, d] = s.split("-");
+  return `${d}/${m}/${y}`;
+ }
+ return s;
+}
+
+function uid(){
+ if(window.crypto && crypto.randomUUID) return crypto.randomUUID();
+ return "MACT-" + Date.now() + "-" + Math.random().toString(36).slice(2);
+}
+
+function nowISO(){ return new Date().toISOString(); }
+
+function toast(message){
+ const t = $("toast");
+ if(!t) return;
+ t.textContent = message;
+ t.classList.add("show");
+ clearTimeout(toast.timer);
+ toast.timer = setTimeout(()=>t.classList.remove("show"), 3200);
+}
+
+function saveLocal(){
+ localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
+}
+
+function loadLocal(){
+ try{
+  const raw = localStorage.getItem(STORAGE_KEY);
+  records = raw ? JSON.parse(raw) : [];
+  if(!Array.isArray(records)) records = [];
+ }catch(e){
+  records = [];
+ }
+}
+
+function getRecord(id){
+ return records.find(r => String(r.recordId) === String(id) || String(r.timestamp) === String(id));
+}
+
+
+function loadFieldVisibility(){
+ try{return JSON.parse(localStorage.getItem(FIELD_VISIBILITY_KEY)||"{}")}catch(e){return {}}
+}
+function saveFieldVisibility(v){localStorage.setItem(FIELD_VISIBILITY_KEY,JSON.stringify(v))}
+function isFieldVisible(fid){const v=loadFieldVisibility();return v[fid]!==false}
+function visibleSections(){
+ return sections.filter((sec,idx)=>sec._visible!==false && sec.fields.some(f=>isFieldVisible(f[0])));
+}
+function renderLayoutEditor(){
+ const box=$("layoutEditorBody"); if(!box)return;
+ box.innerHTML=sections.map((sec,si)=>{
+  const secVisible=sec._visible!==false;
+  return `<div class="section" style="margin-bottom:10px">
+   <div class="layout-section-head">
+    <label style="display:flex;align-items:center;gap:7px;font-weight:700">
+     <input type="checkbox" class="layout-section-check" data-section-index="${si}" ${secVisible?"checked":""}>
+     ${escapeHtml(sec.title)}
+    </label>
+    <span class="adv-muted">${sec.fields.length} fields</span>
+   </div>
+   <div style="padding:6px 0">
+    ${sec.fields.map((f,fi)=>`<div class="layout-field-row">
+      <input type="checkbox" class="layout-field-check" data-field-id="${escapeHtml(f[0])}" data-section-index="${si}" ${isFieldVisible(f[0])?"checked":""}>
+      <label>${escapeHtml(f[1])}</label>
+      <span class="adv-muted">${escapeHtml(f[2])}</span>
+      <button type="button" class="btn btn-light btn-sm layout-up" data-section="${si}" data-field="${fi}" ${fi===0?"disabled":""}>↑</button>
+      <button type="button" class="btn btn-light btn-sm layout-down" data-section="${si}" data-field="${fi}" ${fi===sec.fields.length-1?"disabled":""}>↓</button>
+     </div>`).join("")}
+   </div>
+  </div>`;
+ }).join("");
+}
+function openLayoutEditor(){renderLayoutEditor();openModal("layoutEditorModal")}
+function saveLayoutEditor(){
+ const vis=loadFieldVisibility();
+ document.querySelectorAll(".layout-field-check").forEach(c=>vis[c.dataset.fieldId]=c.checked);
+ document.querySelectorAll(".layout-section-check").forEach(c=>{
+   const i=Number(c.dataset.sectionIndex); if(sections[i]) sections[i]._visible=c.checked;
+ });
+ saveFieldVisibility(vis);saveLayout();renderForm();toast("Layout saved successfully.");closeModal("layoutEditorModal");
+}
+function moveLayoutField(si,fi,dir){
+ const arr=sections[si]?.fields;if(!arr||!arr[fi])return;
+ const ni=fi+dir;if(ni<0||ni>=arr.length)return;
+ [arr[fi],arr[ni]]=[arr[ni],arr[fi]];saveLayout();renderLayoutEditor();renderForm();
+}
+function printFieldSelector(mode,id){
+ const box=$("printFieldsBody");if(!box)return;
+ box.dataset.mode=mode||"record";box.dataset.recordId=id||"";
+ const saved=(()=>{try{return JSON.parse(localStorage.getItem(PRINT_FIELDS_KEY)||"[]")}catch(e){return []}})();
+ box.innerHTML=sections.map((sec,si)=>`<div class="section">
+  <div class="section-title"><label style="display:flex;align-items:center;gap:7px"><input type="checkbox" class="print-section-check" data-section="${si}"> ${escapeHtml(sec.title)}</label></div>
+  <div class="section-body print-check-grid">
+   ${sec.fields.filter(f=>isFieldVisible(f[0])).map(f=>`<label class="print-check"><input type="checkbox" class="print-field-check" data-field-id="${escapeHtml(f[0])}" ${saved.includes(f[0])?"checked":""}> ${escapeHtml(f[1])}</label>`).join("")}
+  </div></div>`).join("")+
+  `<div class="section"><div class="section-title">Proceedings</div><div class="section-body"><label class="print-check"><input type="checkbox" id="printProceedingsCheck" checked> Include Proceeding / Hearing History</label></div></div>`;
+ openModal("printFieldsModal");
+}
+function getSelectedPrintFields(){
+ return [...document.querySelectorAll(".print-field-check:checked")].map(x=>x.dataset.fieldId);
+}
+function printSelectedFields(){
+ const box=$("printFieldsBody");if(!box)return;
+ const fields=getSelectedPrintFields();if(!fields.length){toast("Please select at least one field.");return}
+ localStorage.setItem(PRINT_FIELDS_KEY,JSON.stringify(fields));
+ const mode=box.dataset.mode||"record",id=box.dataset.recordId;
+ if(mode==="record"){
+   const r=getRecord(id);if(!r)return;
+   let content=`<h1>${escapeHtml(r.caseTitle||"MACT Case Record")}</h1><p><b>Case ID:</b> ${escapeHtml(r.recordId)}</p>`;
+   sections.forEach(sec=>{const chosen=sec.fields.filter(f=>fields.includes(f[0]));if(!chosen.length)return;content+=`<h2>${escapeHtml(sec.title)}</h2><table>`;chosen.forEach(([fid,label])=>{let v=r[fid]||"";if(fid.toLowerCase().includes("date"))v=formatDate(v);content+=`<tr><th> ${escapeHtml(label)}</th><td>${escapeHtml(v)}</td></tr>`});content+="</table>"});
+   if( $("printProceedingsCheck")?.checked){content+=`<h2>Proceedings</h2><table><tr><th>Proceeding Date</th><th>Next Date</th><th>Notes</th></tr>`;(r.proceedings||[]).forEach(p=>content+=`<tr><td> ${escapeHtml(formatDate(p.proceedingDate))}</td><td>${escapeHtml(formatDate(p.nextDate))}</td><td> ${escapeHtml(p.notes||"")}</td></tr>`);content+="</table>"}
+   closeModal("printFieldsModal");openPrintWindow("MACT Case Record",content);
+ }else{
+   const list=advancedList();
+   const cols=fields.map(fid=>{const f=sections.flatMap(s=>s.fields).find(x=>x[0]===fid);return [fid,f?f[1]:fid]});
+   const head=cols.map(([,label])=>`<th>${escapeHtml(label)}</th>`).join("");
+   const rows=list.map(r=>`<tr>${cols.map(([fid])=>{let v=r[fid]||"";if(fid.toLowerCase().includes("date"))v=formatDate(v);return `<td> ${escapeHtml(v)}</td>`}).join("")}</tr>`).join("");
+   closeModal("printFieldsModal");openPrintWindow("MACT Records",`<h1>MACT Case Records</h1><p>Total Records: ${list.length}</p><table><thead><tr> ${head}</tr></thead><tbody>${rows||`<tr><td colspan=" ${cols.length}">No records.</td></tr>`}</tbody></table>`);
+ }
+}
+function petitionValue(r,...ids){for(const id of ids){if(r[id]!==undefined&&String(r[id]).trim())return String(r[id]).trim()}return ""}
+function buildPetition(r){
+ const type=$("petitionType")?.value||"166";
+ const sec=type==="140"?"140":type==="163A"?"163A":"166";
+ const court=petitionValue(r,"courtName")||"[NAME OF MOTOR ACCIDENT CLAIMS TRIBUNAL / COURT]";
+ const claimant=petitionValue(r,"claimantName")||"[CLAIMANT NAME]";
+ const father=petitionValue(r,"fatherName");
+ const address=[r.village,r.town,r.tehsil,r.district,r.state].filter(Boolean).join(", ")||petitionValue(r,"otherAddress")||"[CLAIMANT ADDRESS]";
+ const accident=petitionValue(r,"accidentDate")||"[ACCIDENT DATE]";
+ const vehicle=petitionValue(r,"vehicleNo")||"[VEHICLE NUMBER]";
+ const vtype=petitionValue(r,"vehicleType");
+ const owner=petitionValue(r,"ownerName")||"[OWNER NAME]";
+ const driver=petitionValue(r,"driverName")||"[DRIVER NAME]";
+ const insurer=petitionValue(r,"insuranceCo")||"[INSURANCE COMPANY]";
+ const fir=petitionValue(r,"fir","crimeNo","gd")||"[FIR / CRIME NUMBER]";
+ const ps=petitionValue(r,"psAccident")||"[POLICE STATION]";
+ const injury=petitionValue(r,"disabilityNature","description","medicalBillsExpenses")||"[NATURE OF INJURY / LOSS]";
+ const disability=petitionValue(r,"disabilityPercentage");
+ const income=petitionValue(r,"income")||"[INCOME]";
+ const occupation=petitionValue(r,"occupation")||"[OCCUPATION]";
+ const compensation=petitionValue(r,"compensationAmount")||"[CLAIMED COMPENSATION]";
+ const mact=petitionValue(r,"mactNo");
+ const sectionsAct=petitionValue(r,"sections")||`Section ${sec} MV Act`;
+ return `BEFORE THE ${court}
+
+M.A.C.T. / CLAIM PETITION
+
+Under Section ${sec} of the Motor Vehicles Act, 1988
+
+MACT No.: ${mact||"[TO BE ALLOTTED]"}
+
+${claimant} ${father?` S/o / D/o / W/o ${father}`:""}
+Resident of ${address}
+... CLAIMANT
+
+VERSUS
+
+1. ${driver}
+   Driver of the offending vehicle
+2. ${owner}
+   Registered Owner of the offending vehicle
+3. ${insurer}
+   Insurer of the offending vehicle
+... RESPONDENTS
+
+CLAIM PETITION
+
+The Claimant respectfully submits as follows:
+
+1. That the claimant is ${claimant} ${father?`, ${father}`:""}, residing at ${address}.
+
+2. That on ${accident}, an accident occurred involving ${vtype?`a ${vtype}`:"the offending vehicle"} bearing registration number ${vehicle}.
+
+3. That the said accident was reported at Police Station ${ps}, vide FIR / Crime No. ${fir}.
+
+4. That due to the accident, the claimant suffered ${injury}. ${disability?` The disability recorded in the case is ${disability}.`:""}
+
+5. That the claimant was engaged in the occupation of ${occupation} and had an income of ${income} before the accident.
+
+6. That the relevant vehicle, ownership and insurance particulars available in the case record are:
+   Vehicle No.: ${vehicle}
+   Owner: ${owner}
+   Driver: ${driver}
+   Insurance Company: ${insurer}
+
+7. That the claimant relies upon the documents and medical / disability records available in the case file, including FIR / police papers, medical records, bills, disability certificate and other supporting documents, as applicable.
+
+8. That the present petition is being filed under ${sectionsAct} seeking just and reasonable compensation for the loss and injuries suffered by the claimant.
+
+PRAYER
+
+In view of the facts stated above, the Claimant respectfully prays that this Hon'ble Tribunal may be pleased to:
+
+a) Award just and reasonable compensation of Rs. ${compensation} or such amount as may be determined by this Hon'ble Tribunal;
+b) Award interest at the rate and for the period considered appropriate by this Hon'ble Tribunal;
+c) Direct the respondents, jointly and/or severally as permissible in law, to satisfy the award;
+d) Grant any other relief which this Hon'ble Tribunal considers just and proper.
+
+Place: ${petitionValue(r,"district")||"[PLACE]"}
+Date: ${localDate()}
+
+CLAIMANT
+${claimant}
+
+VERIFICATION
+
+I, ${claimant}, the claimant above named, verify that the contents of this petition, to the extent based on the case information supplied, are true and correct to my knowledge and belief and that nothing material has been concealed.
+
+Place: ${petitionValue(r,"district")||"[PLACE]"}
+Date: ${localDate()}
+
+CLAIMANT
+${claimant}
+
+NOTE: This is a data-driven draft generated from the MACT case record. It must be reviewed and legally finalized before filing.`;
+}
+function openPetition(id){
+ const r=getRecord(id||currentRecordId);if(!r){toast("Please open a case first.");return}
+ currentRecordId=r.recordId;
+ if( $("petitionText")) $("petitionText").value=buildPetition(r);
+ if( $("petitionSourceInfo")) $("petitionSourceInfo").textContent=`Generated from claimant/case information: ${r.claimantName||"Claimant"} • ${r.mactNo||"MACT No. not entered"}`;
+ openModal("petitionModal");
+}
+
+function renderForm(){
+ let html = "";
+ sections.forEach((section, index)=>{
+  html += `
+   <div class="section" data-section-index="${index}">
+    <div class="section-title" data-section="${index}">
+     <span>${escapeHtml(section.title)}</span>
+     <span>⌄</span>
+    </div>
+    <div class="section-body">
+     <div class="form-grid" data-grid-section="${index}">
+  `;
+  const visibleFields = (section.fields || []).filter(f => isFieldVisible(f[0]));
+  if(section._visible === false || !visibleFields.length){ return; }
+  visibleFields.forEach(field=>{
+   const [id, label, type, optOrCls, clsParam] = field;
+   let input = "";
+   if(type === "textarea"){
+    input = `<textarea id="${id}" name="${id}"></textarea>`;
+   }else if(type === "select"){
+    const opts = Array.isArray(optOrCls) ? optOrCls : [];
+    input = `<select id="${id}" name="${id}">${opts.map(o=>`<option value=" ${escapeHtml(o)}">${escapeHtml(o)}</option>`).join("")}</select>`;
+   }else{
+    input = `<input id="${id}" name="${id}" type="${type}" autocomplete="off">`;
+   }
+   const isFull = (type === "textarea" && (optOrCls === "full" || clsParam === "full")) || clsParam === "full";
+   html += `
+    <div class="field ${isFull?"full":""}" draggable="true" data-field-id="${id}">
+     <span class="field-handle" title="Drag to reorder">⠿ Drag</span>
+     <label for="${id}"> ${escapeHtml(label)}</label>
+     ${input}
+    </div>
+   `;
+  });
+  html += `</div></div></div>`;
+ });
+
+ html += `
+  <div class="section">
+   <div class="section-title">📌 Proceeding / Hearing History</div>
+   <div class="section-body">
+    <div id="proceedingsContainer"></div>
+    <button type="button" class="btn btn-light" id="addProceedingInsideForm">➕ Add Proceeding</button>
+   </div>
+  </div>
+  <div class="section">
+   <div class="section-title">⚖️ Judgment PDF</div>
+   <div class="section-body">
+    <div class="field">
+     <label>Upload Judgment PDF</label>
+     <input type="file" id="judgmentPdfInput" accept="application/pdf">
+     <small id="currentPdfInfo" style="color:#64748b"></small>
+    </div>
+   </div>
+  </div>
+ `;
+
+ const formSectionsEl = $("formSections");
+ if(formSectionsEl) formSectionsEl.innerHTML = html;
+
+ Object.entries(defaults).forEach(([id, value])=>{
+  const el = $(id);
+  if(el) el.value = value;
+ });
+
+ document.querySelectorAll(".section-title[data-section]").forEach(title=>{
+  title.addEventListener("click", ()=>{
+   const body = title.nextElementSibling;
+   if(body) body.classList.toggle("hidden");
+  });
+ });
+
+ const addProcBtn = $("addProceedingInsideForm");
+ if(addProcBtn){
+  addProcBtn.onclick = () => addProceedingFormRow();
+ }
+ initDragAndDrop();
+}
+
+let draggedElement = null;
+
+function initDragAndDrop(){
+ document.querySelectorAll(".form-grid .field").forEach(field=>{
+  field.addEventListener("dragstart", e=>{
+   draggedElement = field;
+   field.classList.add("dragging");
+   e.dataTransfer.effectAllowed = "move";
+  });
+
+  field.addEventListener("dragend", ()=>{
+   field.classList.remove("dragging");
+   draggedElement = null;
+   document.querySelectorAll(".form-grid .field").forEach(f=>f.classList.remove("drag-over"));
+   updateSectionOrderFromDOM();
+  });
+
+  field.addEventListener("dragover", e=>{
+   e.preventDefault();
+   e.dataTransfer.dropEffect = "move";
+   const grid = field.closest(".form-grid");
+   if(draggedElement && draggedElement.parentNode === grid && draggedElement !== field){
+    const rect = field.getBoundingClientRect();
+    const mid = rect.top + rect.height / 2;
+    if(e.clientY < mid){
+     grid.insertBefore(draggedElement, field);
+    }else{
+     grid.insertBefore(draggedElement, field.nextSibling);
+    }
+   }
+  });
+ });
+}
+
+function updateSectionOrderFromDOM(){
+ sections.forEach((sec, sIdx)=>{
+  const grid = document.querySelector(`[data-grid-section="${sIdx}"]`);
+  if(!grid) return;
+  const fieldDivs = grid.querySelectorAll(".field[data-field-id]");
+  const newFields = [];
+  fieldDivs.forEach(div=>{
+   const fid = div.dataset.fieldId;
+   const found = sec.fields.find(f=>f[0]===fid);
+   if(found) newFields.push(found);
+  });
+  sec.fields = newFields;
+ });
+ saveLayout();
+}
+
+const newFieldBtn = $("addNewFieldBtn");
+if(newFieldBtn){
+ newFieldBtn.onclick = () => openModal("customFieldModal");
+}
+
+const cfTypeEl = $("cfType");
+if(cfTypeEl){
+ cfTypeEl.onchange = (e) => {
+  const optField = $("cfOptionsField");
+  if(optField) optField.style.display = e.target.value === "select" ? "block" : "none";
+ };
+}
+
+const customFieldForm = $("customFieldForm");
+if(customFieldForm){
+ customFieldForm.onsubmit = (e) => {
+  e.preventDefault();
+  const secIdx = parseInt($("cfSectionIndex").value, 10);
+  const label = $("cfLabel").value.trim();
+  const type = $("cfType").value;
+  const optionsRaw = $("cfOptions").value.trim();
+
+  if(!label) return;
+
+  const fieldId = "custom_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6);
+  let optionsParam = type === "select" ? optionsRaw.split(",").map(s=>s.trim()).filter(Boolean) : (type === "textarea" ? "full" : undefined);
+
+  const targetSec = sections[secIdx];
+  targetSec.fields.push([fieldId, label, type, optionsParam]);
+
+  let customList = [];
+  try{
+   customList = JSON.parse(localStorage.getItem(CUSTOM_FIELDS_KEY) || "[]");
+  }catch(e){}
+  customList.push({ id: fieldId, label, type, options: optionsParam, sectionIndex: secIdx });
+  localStorage.setItem(CUSTOM_FIELDS_KEY, JSON.stringify(customList));
+
+  saveLayout();
+  renderForm();
+  closeModal("customFieldModal");
+  customFieldForm.reset();
+  const optField = $("cfOptionsField");
+  if(optField) optField.style.display = "none";
+  toast("Custom field created successfully.");
+ };
+}
+
+
+$("editLayoutBtn")?.addEventListener("click",openLayoutEditor);
+$("saveLayoutEditorBtn")?.addEventListener("click",saveLayoutEditor);
+$("resetLayoutBtn")?.addEventListener("click",()=>{
+ if(!confirm("Reset module and field visibility to default?"))return;
+ localStorage.removeItem(FIELD_VISIBILITY_KEY);
+ sections=JSON.parse(JSON.stringify(defaultSections));loadCustomFields();saveLayout();renderForm();renderLayoutEditor();toast("Layout reset.");
+});
+$("layoutEditorBody")?.addEventListener("click",e=>{
+ const up=e.target.closest(".layout-up"),down=e.target.closest(".layout-down");
+ if(up)moveLayoutField(Number(up.dataset.section),Number(up.dataset.field),-1);
+ if(down)moveLayoutField(Number(down.dataset.section),Number(down.dataset.field),1);
+});
+$("layoutEditorBody")?.addEventListener("change",e=>{
+ if(e.target.classList.contains("layout-section-check")){
+   const i=Number(e.target.dataset.sectionIndex);
+   sections[i]._visible=e.target.checked;
+   document.querySelectorAll(`.layout-field-check[data-section-index="${i}"]`).forEach(c=>c.checked=e.target.checked);
+ }
+});
+$("toggleRecordModalSizeBtn")?.addEventListener("click",()=>{
+ const c=$("newFileModal")?.querySelector(".modal-content");if(!c)return;
+ const max=c.classList.toggle("modal-maximized");
+ $("toggleRecordModalSizeBtn").textContent=max?"↙ Restore":"⛶ Maximize";
+});
+$("printCurrentRecordBtn")?.addEventListener("click",()=>printFieldSelector("record",currentRecordId));
+$("generatePetitionBtn")?.addEventListener("click",()=>openPetition(currentRecordId));
+$("confirmPrintFieldsBtn")?.addEventListener("click",printSelectedFields);
+$("printSelectAllBtn")?.addEventListener("click",()=>document.querySelectorAll(".print-field-check").forEach(x=>x.checked=true));
+$("printClearAllBtn")?.addEventListener("click",()=>document.querySelectorAll(".print-field-check").forEach(x=>x.checked=false));
+$("printFieldsBody")?.addEventListener("change",e=>{
+ if(e.target.classList.contains("print-section-check")){
+   const si=e.target.dataset.section;
+   const sec=sections[si];
+   sec?.fields.filter(f=>isFieldVisible(f[0])).forEach(f=>{const c=document.querySelector(`.print-field-check[data-field-id="${CSS.escape(f[0])}"]`);if(c)c.checked=e.target.checked});
+ }
+});
+ $("regeneratePetitionBtn")?.addEventListener("click",()=>{const r=getRecord(currentRecordId);if(r) $("petitionText").value=buildPetition(r)});
+$("printPetitionBtn")?.addEventListener("click",()=>{
+ const txt= $("petitionText")?.value||"";openPrintWindow("MACT Petition",`<div style="white-space:pre-wrap;font-family:Georgia,serif;line-height:1.55"> ${escapeHtml(txt)}</div>`);
+});
+
+function getProceedingsFromForm(){
+ return [...document.querySelectorAll(".proceeding[data-row]")].map(row=>({
+  proceedingDate: row.querySelector(".p-date")?.value || "",
+  nextDate: row.querySelector(".p-next")?.value || "",
+  notes: row.querySelector(".p-notes")?.value || ""
+ }));
+}
+
+function renderProceedings(list=[]){
+ const box = $("proceedingsContainer");
+ if(!box) return;
+ box.innerHTML = "";
+ if(!list.length){
+  box.innerHTML = `<div style="font-size:12px;color:#64748b;margin-bottom:10px">No proceedings added yet.</div>`;
+  return;
+ }
+ list.forEach(item => addProceedingFormRow(item));
+}
+
+function addProceedingFormRow(data={}){
+ const box = $("proceedingsContainer");
+ if(!box) return;
+ if(box.children.length === 1 && !box.querySelector(".proceeding[data-row]")){
+  box.innerHTML = "";
+ }
+ const row = document.createElement("div");
+ row.className = "proceeding";
+ row.dataset.row = "1";
+ row.innerHTML = `
+  <div class="proceeding-head">
+   <strong style="font-size:12px">Proceeding</strong>
+   <button type="button" class="btn btn-danger btn-sm remove-proceeding">Remove</button>
+  </div>
+  <div class="proceeding-grid">
+   <div class="field">
+    <label>Proceeding Date</label>
+    <input type="date" class="p-date" value="${escapeHtml(data.proceedingDate || "")}">
+   </div>
+   <div class="field">
+    <label>Next Date</label>
+    <input type="date" class="p-next" value="${escapeHtml(data.nextDate || "")}">
+   </div>
+   <div class="field">
+    <label>Notes</label>
+    <input type="text" class="p-notes" value="${escapeHtml(data.notes || "")}">
+   </div>
+  </div>
+ `;
+ row.querySelector(".remove-proceeding").onclick = () => row.remove();
+ box.appendChild(row);
+}
+
+function latestNextDate(record){
+ const arr = Array.isArray(record.proceedings) ? record.proceedings : [];
+ const dates = arr.map(x => x.nextDate).filter(Boolean).sort();
+ return dates.length ? dates[dates.length - 1] : "";
+}
+
+function openModal(id){ const m = $(id); if(m) m.classList.add("show"); }
+function closeModal(id){ const m = $(id); if(m) m.classList.remove("show"); }
+
+document.addEventListener("click", e => {
+ const btn = e.target.closest("[data-close]");
+ if(btn) closeModal(btn.dataset.close);
+});
+
+document.querySelectorAll(".modal").forEach(m => {
+ m.addEventListener("click", e => { if(e.target === m) m.classList.remove("show"); });
+});
+
+function clearForm(){
+ const fForm = $("newFileForm");
+ if(fForm) fForm.reset();
+ Object.entries(defaults).forEach(([id, value])=>{
+  const el = $(id);
+  if(el) el.value = value;
+ });
+ renderProceedings([]);
+ if($("judgmentPdfInput")) $("judgmentPdfInput").value = "";
+ if($("currentPdfInfo")) $("currentPdfInfo").textContent = "";
+ editingRecordId = null;
+ if($("recordModalTitle")) $("recordModalTitle").textContent = "➕ Add New File Record";
+ if($("draftIndicator")) $("draftIndicator").style.display = "none";
+ try{ localStorage.removeItem(DRAFT_KEY); }catch(e){}
+}
+
+function openNewRecord(){
+ clearForm();
+ // restore draft if any
+ try{
+  const draft = JSON.parse(localStorage.getItem(DRAFT_KEY)||"null");
+  if(draft && draft.data){
+   Object.keys(draft.data).forEach(k=>{
+    const el = $(k);
+    if(el) el.value = draft.data[k];
+   });
+   if(Array.isArray(draft.proceedings)) renderProceedings(draft.proceedings);
+   if($("draftIndicator")) $("draftIndicator").style.display = "inline";
+  }
+ }catch(e){}
+ openModal("newFileModal");
+}
+
+function editRecord(id){
+ const r = getRecord(id);
+ if(!r) return;
+ editingRecordId = r.recordId;
+ getAllFieldIds().forEach(fid => {
+  const el = $(fid);
+  if(el) el.value = r[fid] ?? "";
+ });
+ renderProceedings(r.proceedings || []);
+ if($("judgmentPdfInput")) $("judgmentPdfInput").value = "";
+ if($("currentPdfInfo")) $("currentPdfInfo").textContent = r.judgmentPdfName ? `Current PDF: ${r.judgmentPdfName}` : "No judgment PDF attached.";
+ if($("recordModalTitle")) $("recordModalTitle").textContent = "✏️ Edit Case Record";
+ if($("draftIndicator")) $("draftIndicator").style.display = "none";
+ closeModal("fileDetailModal");
+ openModal("newFileModal");
+}
+
+const newFileForm = $("newFileForm");
+if(newFileForm){
+ newFileForm.onsubmit = async (e) => {
+  e.preventDefault();
+  const existing = editingRecordId ? getRecord(editingRecordId) : null;
+  const data = {
+   recordId: existing?.recordId || uid(),
+   timestamp: existing?.timestamp || Date.now(),
+   createdAt: existing?.createdAt || nowISO(),
+   updatedAt: nowISO()
+  };
+  getAllFieldIds().forEach(fid => {
+   const el = $(fid);
+   data[fid] = el ? el.value.trim() : "";
+  });
+  data.proceedings = getProceedingsFromForm();
+  const pdfInput = $("judgmentPdfInput");
+  if(pdfInput && pdfInput.files && pdfInput.files[0]){
+   const file = pdfInput.files[0];
+   if(file.type !== "application/pdf"){ toast("Please select a PDF file."); return; }
+   if(file.size > PDF_MAX_MB * 1024 * 1024){ toast(`PDF is too large. Max size is ${PDF_MAX_MB} MB.`); return; }
+   try{
+    data.judgmentPdfName = file.name;
+    data.judgmentPdfUrl = await readFileAsDataURL(file);
+   }catch(err){ toast("Could not read PDF."); return; }
+  }else if(existing){
+   data.judgmentPdfName = existing.judgmentPdfName || "";
+   data.judgmentPdfUrl = existing.judgmentPdfUrl || "";
+  }else{
+   data.judgmentPdfName = "";
+   data.judgmentPdfUrl = "";
+  }
+  if(!data.caseTitle && !data.mactNo && !data.claimantName){
+   toast("Please enter at least Case Title, MACT No. or Claimant Name.");
+   return;
+  }
+  if(existing){
+   const index = records.findIndex(r => r.recordId === existing.recordId);
+   if(index >= 0) records[index] = data;
+  }else{
+   records.unshift(data);
+  }
+  saveLocal();
+  try{ localStorage.removeItem(DRAFT_KEY); }catch(e){}
+  if($("draftIndicator")) $("draftIndicator").style.display = "none";
+  renderAll();
+  closeModal("newFileModal");
+  editingRecordId = null;
+  toast(existing ? "Record updated successfully." : "Record saved successfully.");
+  await syncCloud();
+ };
+}
+
+// Auto-save draft every 8 seconds while form is open
+setInterval(()=>{
+ const modal = $("newFileModal");
+ if(!modal || !modal.classList.contains("show") || editingRecordId) return;
+ const data = {};
+ getAllFieldIds().forEach(fid=>{
+  const el = $(fid);
+  if(el) data[fid] = el.value;
+ });
+ const proceedings = getProceedingsFromForm();
+ try{
+  localStorage.setItem(DRAFT_KEY, JSON.stringify({data, proceedings, savedAt: nowISO()}));
+  if($("draftIndicator")) $("draftIndicator").style.display = "inline";
+ }catch(e){}
+}, 8000);
+
+function readFileAsDataURL(file){
+ return new Promise((resolve, reject)=>{
+  const reader = new FileReader();
+  reader.onload = () => resolve(reader.result);
+  reader.onerror = reject;
+  reader.readAsDataURL(file);
+ });
+}
+
+function statusBadge(value){
+ const v = String(value || "").toLowerCase();
+ if(v.includes("closed") || v.includes("disposed") || v.includes("settled") || v.includes("judgment")){
+  return `<span class="badge success">${escapeHtml(value || "—")}</span>`;
+ }
+ if(v.includes("pending")){
+  return `<span class="badge warning">${escapeHtml(value || "Pending")}</span>`;
+ }
+ return `<span class="badge">${escapeHtml(value || "Active")}</span>`;
+}
+
+function renderTable(){
+ const tbody = $("recordsTableBody");
+ if(!tbody) return;
+ const query = $("globalSearchInput")?.value.trim().toLowerCase() || "";
+ const filtered = records.filter(r => {
+   if(r.deleted || r.deletedAt) return false;
+  if(!query) return true;
+  return JSON.stringify(r).toLowerCase().includes(query);
+ });
+ if(!filtered.length){
+  tbody.innerHTML = `<tr><td colspan="11" class="empty"><div class="empty-state"><div class="icon">📂</div>No records found. Click “Add New File” to create your first case.</div></td></tr>`;
+  return;
+ }
+ tbody.innerHTML = filtered.map(r => {
+  const next = latestNextDate(r);
+  return `
+   <tr>
+    <td><input type="checkbox" class="record-check" value="${escapeHtml(r.recordId)}"></td>
+    <td>
+     <div class="case-link" data-view="${escapeHtml(r.recordId)}"> ${escapeHtml(r.caseTitle || "Untitled Case")}</div>
+     <div style="font-size:10px;color:#64748b;margin-top:3px">ID: ${escapeHtml(String(r.recordId).slice(0, 12))}</div>
+    </td>
+    <td>${escapeHtml(r.mactNo || "—")}</td>
+    <td>${escapeHtml(r.claimantName || "—")}</td>
+    <td>${escapeHtml(formatDate(r.accidentDate) || "—")}</td>
+    <td>${escapeHtml(r.vehicleNo || "—")}<br> ${escapeHtml(r.vehicleType || "")}</td>
+    <td>${escapeHtml(r.insuranceCo || "—")}</td>
+    <td>${escapeHtml(formatDate(next) || "—")}</td>
+    <td>${statusBadge(r.finalStatus || r.judgementStatus)}</td>
+    <td>
+     ${r.judgmentPdfUrl ? `<button type="button" class="btn btn-light btn-sm pdf-open" data-id="${escapeHtml(r.recordId)}">📄 View</button>` : `<span style="color:#94a3b8">No PDF</span>`}
+     <label class="btn btn-light btn-sm" style="margin-top:4px">
+      ${r.judgmentPdfUrl ? "Change" : "Upload"}
+      <input type="file" class="pdf-upload" data-id="${escapeHtml(r.recordId)}" accept="application/pdf" hidden>
+     </label>
+    </td>
+    <td>
+     <div style="display:flex;gap:5px;flex-wrap:wrap">
+      <button type="button" class="btn btn-primary btn-sm" data-edit="${escapeHtml(r.recordId)}">Edit</button>
+      <button type="button" class="btn btn-warning btn-sm" data-hearing="${escapeHtml(r.recordId)}">Date</button>
+      <button type="button" class="btn btn-danger btn-sm" data-delete="${escapeHtml(r.recordId)}">Delete</button>
+     </div>
+    </td>
+   </tr>
+  `;
+ }).join("");
+}
+
+// Debounced search
+if($("globalSearchInput")){
+ $("globalSearchInput").oninput = () => {
+  clearTimeout(searchDebounceTimer);
+  const tbody = $("recordsTableBody");
+  if(tbody) tbody.classList.add("loading");
+  searchDebounceTimer = setTimeout(()=>{
+   renderTable();
+   if(tbody) tbody.classList.remove("loading");
+  }, 220);
+ };
+}
+
+const recordsTableBody = $("recordsTableBody");
+if(recordsTableBody){
+ recordsTableBody.onclick = e => {
+  const view = e.target.closest("[data-view]");
+  if(view){ openDetail(view.dataset.view); return; }
+  const edit = e.target.closest("[data-edit]");
+  if(edit){ editRecord(edit.dataset.edit); return; }
+  const hearing = e.target.closest("[data-hearing]");
+  if(hearing){ openHearingModal(hearing.dataset.hearing); return; }
+  const del = e.target.closest("[data-delete]");
+  if(del){ deleteRecord(del.dataset.delete); return; }
+  const pdf = e.target.closest(".pdf-open");
+  if(pdf){ openPdf(pdf.dataset.id); }
+ };
+
+ recordsTableBody.onchange = async e => {
+  if(!e.target.classList.contains("pdf-upload")) return;
+  const id = e.target.dataset.id;
+  const r = getRecord(id);
+  const file = e.target.files[0];
+  if(!r || !file) return;
+  if(file.type !== "application/pdf"){ toast("Only PDF files allowed."); return; }
+  if(file.size > PDF_MAX_MB * 1024 * 1024){ toast(`PDF too large. Max ${PDF_MAX_MB} MB.`); return; }
+  r.judgmentPdfName = file.name;
+  r.judgmentPdfUrl = await readFileAsDataURL(file);
+  r.updatedAt = nowISO();
+  saveLocal();
+  renderAll();
+  toast("Judgment PDF saved.");
+  syncCloud();
+ };
+}
+
+function openDetail(id){
+ const r = getRecord(id);
+ if(!r) return;
+ currentRecordId = r.recordId;
+ let html = `
+  <div style="margin-bottom:18px">
+   <h2 style="margin:0 0 5px">${escapeHtml(r.caseTitle || "Untitled Case")}</h2>
+   <div style="font-size:11px;color:#64748b">Case ID: ${escapeHtml(r.recordId)}</div>
+  </div>
+ `;
+ sections.forEach(section => {
+  html += `<div class="section"><div class="section-title">${escapeHtml(section.title)}</div><div class="section-body"><div class="detail-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px">`;
+  section.fields.forEach(([fid, label])=>{
+   const value = r[fid];
+   html += `<div style="background:#f8fafc;padding:8px;border-radius:6px;border:1px solid #e2e8f0"><div style="font-size:11px;color:#64748b;font-weight:600">${escapeHtml(label)}</div><div style="font-size:13px;margin-top:2px"> ${escapeHtml(fid.toLowerCase().includes("date") ? formatDate(value) : (value || "—"))}</div></div>`;
+  });
+  html += `</div></div></div>`;
+ });
+ html += `<div class="section"><div class="section-title">📅 Proceedings</div><div class="section-body">`;
+ if((r.proceedings || []).length){
+  html += (r.proceedings || []).map((p, i)=>`
+   <div class="proceeding">
+    <strong>Proceeding ${i+1}</strong>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:8px">
+     <div><div style="font-size:11px;color:#64748b">Proceeding Date</div><div>${escapeHtml(formatDate(p.proceedingDate) || "—")}</div></div>
+     <div><div style="font-size:11px;color:#64748b">Next Date</div><div>${escapeHtml(formatDate(p.nextDate) || "—")}</div></div>
+     <div><div style="font-size:11px;color:#64748b">Notes</div><div>${escapeHtml(p.notes || "—")}</div></div>
+    </div>
+   </div>
+  `).join("");
+ }else{
+  html += `<div style="font-size:12px;color:#64748b">No proceeding history.</div>`;
+ }
+ html += `</div></div>`;
+ html += `<div class="section"><div class="section-title">⚖️ Judgment PDF</div><div class="section-body">${r.judgmentPdfUrl ? `<button type="button" class="btn btn-primary" onclick="openPdf(' ${escapeHtml(r.recordId)}')">📄 Open ${escapeHtml(r.judgmentPdfName || "Judgment PDF")}</button>` : `<span style="color:#64748b">No judgment PDF attached.</span>`}</div></div>`;
+ if($("fileDetailBody")) $("fileDetailBody").innerHTML = html;
+ openModal("fileDetailModal");
+}
+
+if($("editCurrentRecordBtn")) $("editCurrentRecordBtn").onclick = () => { if(currentRecordId) editRecord(currentRecordId); };
+if($("quickAddHearingBtn")) $("quickAddHearingBtn").onclick = () => { if(currentRecordId) openHearingModal(currentRecordId); };
+if($("printCurrentRecordBtn")) $("printCurrentRecordBtn").onclick = () => { if(currentRecordId) printFieldSelector("record", currentRecordId); };
+
+function deleteRecord(id){
+ const r = getRecord(id);
+ if(!r) return;
+ if(String(r.locked)==="YES"){ toast("Locked record cannot be deleted. Unlock it first."); return; }
+ if(!confirm(`Move this record to Recycle Bin?\n\n${r.caseTitle || r.claimantName || r.mactNo || "Selected Case"}`)) return;
+ r.deleted=true; r.deletedAt=nowISO(); r.deleteSource="user"; r.updatedAt=nowISO();
+ saveLocal(); renderAll();
+ toast("Record moved to Recycle Bin. It can be restored.");
+ syncCloud();
+}
+
+if($("bulkDeleteBtn")){
+ $("bulkDeleteBtn").onclick = () => {
+  const ids=[...document.querySelectorAll(".record-check:checked")].map(x=>String(x.value));
+  if(!ids.length){toast("Please select records first.");return;}
+  if(!confirm(`Move ${ids.length} selected record(s) to Recycle Bin?`))return;
+  let n=0;
+  records.forEach(r=>{
+   if(ids.includes(String(r.recordId)) && String(r.locked)!=="YES"){
+    r.deleted=true;r.deletedAt=nowISO();r.deleteSource="bulk";r.updatedAt=nowISO();n++;
+   }
+  });
+  saveLocal();renderAll();toast(`${n} record(s) moved to Recycle Bin.`);syncCloud();
+ };
+}
+
+if($("selectAllCheckbox")){
+ $("selectAllCheckbox").onchange = (e) => {
+  document.querySelectorAll(".record-check").forEach(c => c.checked = e.target.checked);
+ };
+}
+
+function getAllHearings(){
+ const list = [];
+ records.filter(r => !r.deleted && !r.deletedAt).forEach(r => {
+  (r.proceedings || []).forEach(p => {
+   if(p.nextDate){ list.push({ record: r, date: p.nextDate, notes: p.notes || "" }); }
+  });
+ });
+ return list.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function checkTodaysHearings(){
+ const today = localDate();
+ const upcoming = getAllHearings().filter(x => x.date >= today);
+ const todayOnly = upcoming.filter(x => x.date === today);
+ if($("todayCount")) $("todayCount").textContent = todayOnly.length;
+ // Header badge
+ const badge = $("headerTodayBadge");
+ if(badge){
+  if(todayOnly.length){
+   badge.style.display = "inline-block";
+   badge.textContent = `Today: ${todayOnly.length} hearing ${todayOnly.length>1?"s":""}`;
+  }else{
+   badge.style.display = "none";
+  }
+ }
+ const visible = upcoming.slice(0, 10);
+ const hearingList = $("hearingList");
+ if(!hearingList) return;
+ if(!visible.length){
+  hearingList.innerHTML = `<div class="empty-state" style="padding:20px"><div class="icon">📅</div>No upcoming hearings.</div>`;
+  return;
+ }
+ hearingList.innerHTML = visible.map(x => `
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid #f1f5f9">
+   <div>
+    <strong>${escapeHtml(x.record.caseTitle || "Untitled Case")}</strong>
+    <div style="font-size:11px;color:#64748b">${escapeHtml(x.record.claimantName || "")} ${x.notes ? " • " + escapeHtml(x.notes) : ""}</div>
+   </div>
+   <div><span class="badge ${x.date === today ? "danger" : "warning"}"> ${x.date === today ? "TODAY" : "NEXT"} • ${escapeHtml(formatDate(x.date))}</span></div>
+  </div>
+ `).join("");
+}
+
+function populateHearingSelect(filterText=""){
+ const select = $("hearingRecordSelect");
+ if(!select) return;
+ const query = filterText.toLowerCase().trim();
+ const filtered = records.filter(r => {
+  if(r.deleted || r.deletedAt) return false;
+  if(!query) return true;
+  return JSON.stringify(r).toLowerCase().includes(query);
+ });
+ select.innerHTML = filtered.map(r => `
+  <option value="${escapeHtml(r.recordId)}"> ${escapeHtml((r.caseTitle || "Untitled") + " | MACT: " + (r.mactNo || "—") + " | Claimant: " + (r.claimantName || "—") + " | Veh: " + (r.vehicleNo || "—"))}</option>
+ `).join("");
+}
+
+if($("hearingRecordSearch")){
+ $("hearingRecordSearch").oninput = (e) => populateHearingSelect(e.target.value);
+}
+
+function openHearingModal(id){
+ if($("hearingRecordSearch")) $("hearingRecordSearch").value = "";
+ populateHearingSelect();
+ if(id){
+  const sel = $("hearingRecordSelect");
+  if(sel) sel.value = id;
+ }
+ if($("newProceedingDate")) $("newProceedingDate").value = localDate();
+ if($("newNextDate")) $("newNextDate").value = "";
+ if($("newProceedingNotes")) $("newProceedingNotes").value = "";
+ openModal("addDateModal");
+}
+
+if($("topAddDateBtn")){
+ $("topAddDateBtn").onclick = () => {
+  if(!records.length){ toast("Create a case record first."); return; }
+  openHearingModal(records[0].recordId);
+ };
+}
+
+const addDateForm = $("addDateForm");
+if(addDateForm){
+ addDateForm.onsubmit = (e) => {
+  e.preventDefault();
+  const sel = $("hearingRecordSelect");
+  const r = getRecord(sel ? sel.value : "");
+  if(!r){ toast("Please select a valid case record."); return; }
+  if(! $("newNextDate") || ! $("newNextDate").value){ toast("Please enter Next Date."); return; }
+  if(!Array.isArray(r.proceedings)) r.proceedings = [];
+  r.proceedings.push({
+   proceedingDate: $("newProceedingDate")?.value || "",
+   nextDate: $("newNextDate")?.value || "",
+   notes: $("newProceedingNotes")?.value?.trim() || ""
+  });
+  r.updatedAt = nowISO();
+  saveLocal();
+  renderAll();
+  closeModal("addDateModal");
+  toast("Hearing date added.");
+  syncCloud();
+ };
+}
+
+const HEARING_PRINT_KEY = "mact_hearing_print_columns_v1";
+const DEFAULT_HEARING_PRINT_COLUMNS = [
+ {id:"date",label:"Hearing Date",hint:"Next hearing / proceeding date"},
+ {id:"caseTitle",label:"Case Title",hint:"Case / matter title"},
+ {id:"mactNo",label:"MACT No.",hint:"Tribunal case number"},
+ {id:"claimantName",label:"Claimant Name",hint:"Primary claimant"},
+ {id:"fileNumber",label:"File Number",hint:"Office file number"},
+ {id:"courtName",label:"Court Name",hint:"Tribunal / court"},
+ {id:"insuranceCo",label:"Insurance Company",hint:"Insurer / respondent"},
+ {id:"claimantCouncil",label:"Claimant Council",hint:"Advocate / counsel"},
+ {id:"accidentDate",label:"Accident Date",hint:"Date of accident"},
+ {id:"notes",label:"Hearing Notes",hint:"Proceeding / hearing notes"},
+ {id:"recordId",label:"Case ID",hint:"Internal record ID"}
+];
+function loadHearingPrintColumns(){
+ try{const x=JSON.parse(localStorage.getItem(HEARING_PRINT_KEY)||"null");if(Array.isArray(x)&&x.length)return x;}catch(e){}
+ return DEFAULT_HEARING_PRINT_COLUMNS.map(x=>x.id);
+}
+function saveHearingPrintColumns(ids){try{localStorage.setItem(HEARING_PRINT_KEY,JSON.stringify(ids))}catch(e){}}
+function renderHearingPrintSettings(){
+ const box=$("hearingPrintFieldsBody");if(!box)return;
+ const selected=new Set(loadHearingPrintColumns());
+ box.innerHTML=DEFAULT_HEARING_PRINT_COLUMNS.map((f,i)=>`<div class="hearing-print-row" draggable="true" data-hearing-print-id="${f.id}">
+  <span class="drag">⠿</span><input type="checkbox" class="hearing-print-check" ${selected.has(f.id)?"checked":""}>
+  <div><label>${escapeHtml(f.label)}</label><small> ${escapeHtml(f.hint)}</small></div>
+  <button type="button" class="btn btn-light btn-sm hearing-up" title="Move up">↑</button>
+  <button type="button" class="btn btn-light btn-sm hearing-down" title="Move down">↓</button>
+ </div>`).join("");
+}
+function getHearingPrintColumns(){
+ return [...document.querySelectorAll(".hearing-print-row")].filter(r=>r.querySelector(".hearing-print-check")?.checked).map(r=>r.dataset.hearingPrintId);
+}
+function openHearingPrintSettings(){renderHearingPrintSettings();openModal("hearingPrintFieldsModal")}
+function printHearingListWithColumns(){
+ const cols=getHearingPrintColumns();
+ if(!cols.length){toast("Please select at least one hearing-list field.");return}
+ saveHearingPrintColumns(cols);
+ const hearings=getAllHearings().filter(x=>x.date>=localDate());
+ const value=(x,id)=>{
+  const r=x.record;
+  if(id==="date") return formatDate(x.date);
+  if(id==="notes") return x.notes||"";
+  if(id==="accidentDate") return formatDate(r.accidentDate||"");
+  if(id==="recordId") return r.recordId||"";
+  return r[id]||"";
+ };
+ const defs=Object.fromEntries(DEFAULT_HEARING_PRINT_COLUMNS.map(x=>[x.id,x]));
+ const head=cols.map(id=>`<th>${escapeHtml(defs[id]?.label||id)}</th>`).join("");
+ const rows=hearings.map(x=>`<tr>${cols.map(id=>`<td> ${escapeHtml(value(x,id))}</td>`).join("")}</tr>`).join("");
+ closeModal("hearingPrintFieldsModal");
+ openPrintWindow("MACT Hearing List",`<h1>MACT Hearing List</h1><p>Generated: ${escapeHtml(new Date().toLocaleString())}</p><table><thead><tr> ${head}</tr></thead><tbody>${rows||`<tr><td colspan=" ${cols.length}">No hearings.</td></tr>`}</tbody></table>`);
+}
+if($("printTodayHearingsBtn")) $("printTodayHearingsBtn").onclick=openHearingPrintSettings;
+if($("confirmHearingPrintBtn")) $("confirmHearingPrintBtn").onclick=printHearingListWithColumns;
+if($("hearingPrintSelectAllBtn")) $("hearingPrintSelectAllBtn").onclick=()=>document.querySelectorAll(".hearing-print-check").forEach(x=>x.checked=true);
+if($("hearingPrintResetBtn")) $("hearingPrintResetBtn").onclick=()=>{saveHearingPrintColumns(DEFAULT_HEARING_PRINT_COLUMNS.map(x=>x.id));renderHearingPrintSettings();};
+$("hearingPrintFieldsBody")?.addEventListener("click",e=>{
+ const row=e.target.closest(".hearing-print-row");if(!row)return;
+ if(e.target.closest(".hearing-up")){const prev=row.previousElementSibling;if(prev)row.parentNode.insertBefore(row,prev);}
+ if(e.target.closest(".hearing-down")){const next=row.nextElementSibling;if(next)row.parentNode.insertBefore(next,row);}
+});
+$("hearingPrintFieldsBody")?.addEventListener("dragstart",e=>{const row=e.target.closest(".hearing-print-row");if(row){row.classList.add("dragging");e.dataTransfer.setData("text/plain",row.dataset.hearingPrintId)}});
+$("hearingPrintFieldsBody")?.addEventListener("dragend",e=>e.target.closest(".hearing-print-row")?.classList.remove("dragging"));
+ $("hearingPrintFieldsBody")?.addEventListener("dragover",e=>{e.preventDefault();const target=e.target.closest(".hearing-print-row"),drag= $("hearingPrintFieldsBody")?.querySelector(".dragging");if(!target||!drag||target===drag)return;const rect=target.getBoundingClientRect();if(e.clientY<rect.top+rect.height/2)target.parentNode.insertBefore(drag,target);else target.parentNode.insertBefore(drag,target.nextSibling);});
+
+if($("exportCsvBtn")){
+ $("exportCsvBtn").onclick = () => {
+  const fieldIds = getAllFieldIds();
+  const headers = ["recordId", "timestamp", "createdAt", "updatedAt", ...fieldIds, "proceedings", "judgmentPdfName"];
+  const lines = [headers.map(csvEscape).join(",")];
+  records.forEach(r => {
+   lines.push(headers.map(h => {
+    if(h === "proceedings") return csvEscape(JSON.stringify(r.proceedings || []));
+    return csvEscape(r[h] ?? "");
+   }).join(","));
+  });
+  const blob = new Blob(["\ufeff" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+  downloadBlob(blob, "MACT_All_Records.csv");
+ };
+}
+
+function csvEscape(value){
+ const s = value == null ? "" : String(value);
+ return `"${s.replace(/"/g, '""')}"`;
+}
+
+function downloadBlob(blob, filename){
+ const url = URL.createObjectURL(blob);
+ const a = document.createElement("a");
+ a.href = url;
+ a.download = filename;
+ document.body.appendChild(a);
+ a.click();
+ a.remove();
+ setTimeout(()=>URL.revokeObjectURL(url), 1000);
+}
+
+function parseCSV(text){
+ const rows = [];
+ let row = [];
+ let cell = "";
+ let quoted = false;
+ for(let i = 0; i < text.length; i++){
+  const ch = text[i];
+  if(quoted){
+   if(ch === '"'){
+    if(text[i + 1] === '"'){ cell += '"'; i++; }
+    else{ quoted = false; }
+   }else{ cell += ch; }
+  }else{
+   if(ch === '"'){ quoted = true; }
+   else if(ch === ','){ row.push(cell); cell = ""; }
+   else if(ch === '\n'){ row.push(cell); rows.push(row); row = []; cell = ""; }
+   else if(ch !== '\r'){ cell += ch; }
+  }
+ }
+ if(cell !== "" || row.length){ row.push(cell); rows.push(row); }
+ return rows;
+}
+
+if($("importCsvInput")){
+ $("importCsvInput").onchange = (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+   try{
+    const rows = parseCSV(reader.result);
+    if(rows.length < 2){ toast("CSV has no data."); return; }
+    const headers = rows[0].map(x => x.trim().replace(/^\ufeff/, ""));
+    let imported = 0;
+    for(let i = 1; i < rows.length; i++){
+     const row = rows[i];
+     if(!row.length) continue;
+     const obj = {};
+     headers.forEach((h, index)=>{ obj[h] = row[index] ?? ""; });
+     obj.recordId = obj.recordId || uid();
+     obj.timestamp = obj.timestamp || Date.now();
+     obj.createdAt = obj.createdAt || nowISO();
+     obj.updatedAt = nowISO();
+     if(obj.proceedings){
+      try{ obj.proceedings = JSON.parse(obj.proceedings); }catch{ obj.proceedings = []; }
+     }else{ obj.proceedings = []; }
+     const existing = records.find(r => r.recordId === obj.recordId);
+     if(existing){ Object.assign(existing, obj); }
+     else{ records.push(obj); }
+     imported++;
+    }
+    saveLocal();
+    renderAll();
+    toast(`${imported} CSV record(s) imported.`);
+    syncCloud();
+   }catch(err){ console.error(err); toast("CSV import failed."); }
+   e.target.value = "";
+  };
+  reader.readAsText(file);
+ };
+}
+
+function openPdf(id){
+ const r = getRecord(id);
+ if(!r?.judgmentPdfUrl) return;
+ const win = window.open();
+ if(!win){ toast("Please allow popups to open PDF."); return; }
+ win.document.write(`<!doctype html><html><head><title>${escapeHtml(r.judgmentPdfName || "Judgment PDF")}</title></head><body style="margin:0"><iframe src=" ${r.judgmentPdfUrl}" style="border:0;width:100vw;height:100vh"></iframe>
+
+</body></html>`);
+ win.document.close();
+}
+
+function openPrintWindow(title, content){
+ const win = window.open("", "_blank");
+ if(!win){ toast("Please allow popups for printing."); return; }
+ win.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>body{font-family:Arial,sans-serif;padding:25px;color:#111}h1{color:#1e3a8a}table{width:100%;border-collapse:collapse}th,td{border:1px solid #aaa;padding:7px;text-align:left;font-size:12px}th{background:#eee}@media print{button{display:none}}</style></head><body> ${content}<script>window.onload=function(){window.print()}<\/script></body></html>`);
+ win.document.close();
+}
+
+function printRecord(id){
+ const r = getRecord(id);
+ if(!r) return;
+ let content = `<h1>${escapeHtml(r.caseTitle || "MACT Case Record")}</h1><p><b>Case ID:</b> ${escapeHtml(r.recordId)}</p>`;
+ sections.forEach(section => {
+  content += `<h2>${escapeHtml(section.title)}</h2><table>`;
+  section.fields.forEach(([fid, label])=>{
+   let value = r[fid] || "";
+   if(fid.toLowerCase().includes("date")) value = formatDate(value);
+   content += `<tr><th>${escapeHtml(label)}</th><td> ${escapeHtml(value)}</td></tr>`;
+  });
+  content += `</table>`;
+ });
+ content += `<h2>Proceedings</h2><table><tr><th>Proceeding Date</th><th>Next Date</th><th>Notes</th></tr>`;
+ (r.proceedings || []).forEach(p => {
+  content += `<tr><td>${escapeHtml(formatDate(p.proceedingDate))}</td><td> ${escapeHtml(formatDate(p.nextDate))}</td><td>${escapeHtml(p.notes || "")}</td></tr>`;
+ });
+ content += `</table>`;
+ openPrintWindow("MACT Case Record", content);
+}
+
+if($("printFilteredRecordsBtn")){
+ $("printFilteredRecordsBtn").onclick = () => printFieldSelector("list","");
+}
+
+function getCloudUrl(){
+ return String(localStorage.getItem("mact_cloud_url") || APPS_SCRIPT_URL || "").trim().replace(/\/+$/,"");
+}
+function cloudJsonp(action, extra={}){
+ return new Promise((resolve,reject)=>{
+  const url=getCloudUrl(); if(!url){reject(new Error("Cloud URL not configured"));return;}
+  const cb="mactCloudCb_"+Date.now()+"_"+Math.random().toString(36).slice(2,8);
+  const script=document.createElement("script");
+  const params=new URLSearchParams(Object.assign({action,callback:cb,_:Date.now()},extra));
+  let timer=setTimeout(()=>{cleanup();reject(new Error("Cloud request timed out"));},15000);
+  function cleanup(){clearTimeout(timer);delete window[cb];script.remove();}
+  window[cb]=(data)=>{cleanup();resolve(data);};
+  script.onerror=()=>{cleanup();reject(new Error("Cloud endpoint could not be reached"));};
+  script.src=url+"?"+params.toString();
+  document.head.appendChild(script);
+ });
+}
+function normalizeCloudRecord(r){
+ const x=Object.assign({},r||{});
+ x.recordId=x.recordId||x.timestamp||uid();
+ x.createdAt=x.createdAt||x.updatedAt||nowISO();
+ x.updatedAt=x.updatedAt||x.createdAt;
+ x.deleted=!!x.deleted;
+ if(x.deleted&&!x.deletedAt)x.deletedAt=x.updatedAt;
+ // Large binary attachments stay local; cloud stores their metadata only.
+ if(Array.isArray(x.documents)) x.documents=x.documents.map(d=>{const y=Object.assign({},d);delete y.data;return y;});
+ if(typeof x.judgmentPdfUrl==="string" && x.judgmentPdfUrl.length>200000) x.judgmentPdfUrl="";
+ delete x.judgmentPdfData;
+ return x;
+}
+async function syncCloud(){
+ if(syncBusy)return false;
+ if(!navigator.onLine){if($("syncStatus"))$("syncStatus").textContent="☁ Offline • Saved locally";return false;}
+ syncBusy=true;
+ if($("syncStatus"))$("syncStatus").textContent="☁ Uploading…";
+ try{
+  records=records.map(normalizeCloudRecord);
+  saveLocal();
+  const payload={action:"backup",records,updatedAt:nowISO(),source:"MACT Legal Portal",appVersion:"V8-Fixed-Cloud"};
+  await fetch(getCloudUrl(),{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify(payload)});
+  await new Promise(r=>setTimeout(r,900));
+  const check=await cloudJsonp("get");
+  const cloudRecords=Array.isArray(check)?check:(Array.isArray(check.records)?check.records:[]);
+  cloudConnected=true;localStorage.setItem("mact_cloud_connected","1");
+  const time=new Date().toLocaleString();
+  localStorage.setItem("mact_last_sync",time);
+  if($("syncStatus"))$("syncStatus").textContent="☁ Cloud Sync Active";
+  if($("lastSyncStatus"))$("lastSyncStatus").textContent="Last Sync: "+time;
+  if($("v7DataChip")){const sp=$("v7DataChip").querySelector("span");if(sp)sp.textContent="Cloud synced";}
+  toast(`Cloud sync complete • ${cloudRecords.length} record(s) on server.`);
+  return true;
+ }catch(err){
+  console.error("Cloud sync error:",err);
+  cloudConnected=false;localStorage.removeItem("mact_cloud_connected");
+  if($("syncStatus"))$("syncStatus").textContent="☁ Cloud unavailable • Local Safe";
+  toast("Cloud sync failed. Local data is safe. Check Cloud URL / Apps Script deployment.");
+  return false;
+ }finally{syncBusy=false;}
+}
+async function pullCloud(){
+ if(!navigator.onLine){toast("You are offline. Local records are available.");return false;}
+ if($("syncStatus"))$("syncStatus").textContent="☁ Connecting…";
+ try{
+  const result=await cloudJsonp("get");
+  const cloudRecords=Array.isArray(result)?result:(Array.isArray(result.records)?result.records:[]);
+  const map=new Map(records.map(r=>[String(r.recordId||r.timestamp),r]));
+  cloudRecords.forEach(raw=>{
+   if(!raw||typeof raw!=="object")return;
+   const cr=normalizeCloudRecord(raw),key=String(cr.recordId),local=map.get(key);
+   if(!local||new Date(cr.updatedAt||cr.createdAt||0).getTime()>=new Date(local.updatedAt||local.createdAt||0).getTime())map.set(key,cr);
+  });
+  records=[...map.values()];saveLocal();renderAll();
+  cloudConnected=true;localStorage.setItem("mact_cloud_connected","1");
+  if($("syncStatus"))$("syncStatus").textContent="☁ Cloud Sync Active";
+  toast(`Cloud connected • ${cloudRecords.length} record(s) received.`);
+  return true;
+ }catch(err){
+  cloudConnected=false;localStorage.removeItem("mact_cloud_connected");
+  if($("syncStatus"))$("syncStatus").textContent="☁ Cloud unavailable • Local Safe";
+  console.warn("Cloud pull unavailable:",err);
+  return false;
+ }
+}
+async function restoreFromCloud(){
+ if(!navigator.onLine){toast("You are offline. Cannot restore from cloud.");return;}
+ if(!confirm("Restore all non-deleted cloud records into the local register?"))return;
+ toast("Restoring cloud records…");
+ try{
+  const result=await cloudJsonp("restore",{scope:"all"});
+  const cloudRecords=Array.isArray(result)?result:(Array.isArray(result.records)?result.records:[]);
+  if(!cloudRecords.length){toast("Cloud backup is empty.");return;}
+  const map=new Map(records.map(r=>[String(r.recordId||r.timestamp),r]));let restored=0;
+  cloudRecords.forEach(raw=>{
+   if(!raw||typeof raw!=="object")return;
+   const cr=normalizeCloudRecord(raw),key=String(cr.recordId),local=map.get(key);
+   if(!local){map.set(key,cr);if(!cr.deleted)restored++;return;}
+   const wasDeleted=!!local.deleted;
+   const ct=new Date(cr.updatedAt||0).getTime(),lt=new Date(local.updatedAt||0).getTime();
+   if(!cr.deleted&&(wasDeleted||ct>=lt)){map.set(key,cr);if(wasDeleted)restored++;}
+  });
+  records=[...map.values()];saveLocal();renderAll();cloudConnected=true;
+  const time=new Date().toLocaleString();localStorage.setItem("mact_last_sync",time);
+  if($("lastSyncStatus"))$("lastSyncStatus").textContent="Last Sync: "+time;
+  toast(restored?`${restored} record(s) restored from cloud.`:"No deleted cloud records were found.");
+ }catch(err){console.error("Restore error:",err);toast("Cloud restore failed. Check Apps Script deployment.");}
+}
+if($("restoreCloudBtn"))$("restoreCloudBtn").onclick=restoreFromCloud;
+async function connectCloud(){
+ if(!navigator.onLine){toast("You are offline. Local mode is available.");return;}
+ toast("Checking cloud connection…");
+ const ok=await pullCloud();
+ if(ok){if(records.length)await syncCloud();return;}
+ const current=getCloudUrl();
+ const entered=prompt("Cloud endpoint not reachable. Paste your deployed Google Apps Script Web App URL:",current);
+ if(!entered||!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec/.test(entered.trim())){
+  toast("Cloud URL not changed. Local data remains safe.");return;
+ }
+ localStorage.setItem("mact_cloud_url",entered.trim().replace(/\/+$/,""));
+ if(await pullCloud()){if(records.length)await syncCloud();}
+ else toast("Cloud endpoint test failed. Deploy Apps Script as a Web App and try again.");
+}
+if($("googleLoginBtn"))$("googleLoginBtn").onclick=connectCloud;
+
+function updateStats(){
+ const visibleRecords=records.filter(r=>!r.deleted&&!r.deletedAt);
+ if($("totalCases")) $("totalCases").textContent = visibleRecords.length;
+ const active = visibleRecords.filter(r => {
+  const s = String(r.finalStatus || r.judgementStatus || "").toLowerCase();
+  return !s.includes("closed") && !s.includes("disposed") && !s.includes("settled");
+ }).length;
+ const pending = visibleRecords.filter(r => {
+  const s = String(r.finalStatus || r.judgementStatus || "").toLowerCase();
+  return s.includes("pending");
+ }).length;
+ const judgments = visibleRecords.filter(r => {
+  const s = String(r.judgementStatus || "").toLowerCase();
+  return s.includes("judgment") || s.includes("judgement");
+ }).length;
+ if($("activeCases")) $("activeCases").textContent = active;
+ if($("pendingCases")) $("pendingCases").textContent = pending;
+ if($("judgmentCases")) $("judgmentCases").textContent = judgments;
+}
+
+function renderAll(){
+ renderTable();
+ updateStats();
+ checkTodaysHearings();
+ updateConnectionUI();
+ const last = localStorage.getItem("mact_last_sync");
+ if($("lastSyncStatus")) $("lastSyncStatus").textContent = "Last Sync: " + (last || "Never");
+}
+
+function initializeApp(){
+ loadLocal();
+ renderForm();
+ renderProceedings([]);
+ renderAll();
+ if(localStorage.getItem("mact_cloud_connected") === "1"){
+  cloudConnected = true;
+  updateConnectionUI();
+  setTimeout(()=>{ if(navigator.onLine) pullCloud(); }, 1000);
+  cloudTimer = setInterval(()=>{
+   if(cloudConnected && navigator.onLine){ syncCloud(); }
+  }, 60000);
+ }else{
+  updateConnectionUI();
+ }
+ const openNewBtn = $("openNewFileModalBtn");
+ if(openNewBtn) openNewBtn.onclick = openNewRecord;
+ if(!records.length && $("topAddDateBtn")){ $("topAddDateBtn").disabled = false; }
+}
+
+document.addEventListener("DOMContentLoaded", initializeApp);
+
+window.addEventListener("beforeunload", () => { try{ saveLocal(); }catch(e){} });
+
+window.MACT = {
+ get records(){ return records; },
+ saveLocal,
+ syncCloud,
+ pullCloud,
+ restoreFromCloud,
+ renderAll,
+ openDetail,
+ editRecord,
+ deleteRecord
+};
+
+
+/* ==========================================================
+   ADVANCED FEATURE ENGINE - additive layer; existing features stay intact
+   ========================================================== */
+(function(){
+ "use strict";
+ const ADV_STATE_KEY="mact_advanced_state_v1", AUDIT_KEY="mact_audit_log_v1", TRASH_KEY="mact_undo_trash_v1";
+ let advPage=1, advDeleted=null, currentDocsRecordId=null, selectedProceedingRecordId=null;
+ let advFilters={status:"",accident:"",vehicle:"",insurance:"",from:"",to:"",hearing:"",priority:"",pdf:""};
+ let advSort="updated_desc", advPageSize=25;
+ const originalRenderTable=renderTable, originalEditRecord=editRecord, originalDeleteRecord=deleteRecord, originalOpenDetail=openDetail;
+ function safeJson(v,f){try{return JSON.parse(v)}catch(e){return f}}
+ function advSave(){try{localStorage.setItem(ADV_STATE_KEY,JSON.stringify({advFilters,advSort,advPageSize}));}catch(e){}}
+ function advLoad(){const x=safeJson(localStorage.getItem(ADV_STATE_KEY),null);if(x){advFilters=Object.assign(advFilters,x.advFilters||{});advSort=x.advSort||advSort;advPageSize=Number(x.advPageSize)||25}}
+ function esc(v){return escapeHtml(v==null?"":v)}
+ function daysFromToday(date){if(!date)return null;const a=new Date(localDate()+"T00:00:00"),b=new Date(date+"T00:00:00");return Math.round((b-a)/86400000)}
+ function hearingDate(r){return latestNextDate(r)||""}
+ function matchesAdvanced(r){
+   const f=advFilters, s=String(r.finalStatus||r.judgementStatus||"");
+   if(f.status && s.toLowerCase()!==f.status.toLowerCase()) return false;
+   if(f.accident && String(r.accidentType||"")!==f.accident) return false;
+   if(f.vehicle && String(r.vehicleType||"")!==f.vehicle) return false;
+   if(f.insurance && !String(r.insuranceCo||"").toLowerCase().includes(f.insurance.toLowerCase())) return false;
+   if(f.priority && String(r.importanceLevel||"")!==f.priority) return false;
+   if(f.from && String(r.accidentDate||"")<f.from) return false;
+   if(f.to && String(r.accidentDate||"")>f.to) return false;
+   if(f.pdf==="yes" && !r.judgmentPdfUrl)return false;
+   if(f.pdf==="no" && r.judgmentPdfUrl)return false;
+   const d=daysFromToday(hearingDate(r));
+   if(f.hearing==="today" && d!==0)return false;
+   if(f.hearing==="7" && (d===null||d<0||d>7))return false;
+   if(f.hearing==="30" && (d===null||d<0||d>30))return false;
+   if(f.hearing==="overdue" && (d===null||d>=0))return false;
+   if(f.hearing==="none" && d!==null && d>=0)return false;
+   return true;
+ }
+ function advancedList(){
+   const q=$("globalSearchInput")?.value.trim().toLowerCase()||"";
+   let list=records.filter(r=>!r.deleted&&!r.deletedAt&&matchesAdvanced(r)&&(!q||JSON.stringify(r).toLowerCase().includes(q)));
+   list.sort((a,b)=>{
+    if(advSort==="case_asc"||advSort==="case_desc"){const x=String(a.caseTitle||a.claimantName||"").toLowerCase(),y=String(b.caseTitle||b.claimantName||"").toLowerCase();return advSort==="case_asc"?x.localeCompare(y):y.localeCompare(x)}
+    if(advSort==="mact_asc")return String(a.mactNo||"").localeCompare(String(b.mactNo||""),undefined,{numeric:true});
+    if(advSort==="next_asc")return String(hearingDate(a)||"9999").localeCompare(String(hearingDate(b)||"9999"));
+    if(advSort==="accident_asc"||advSort==="accident_desc"){const x=String(a.accidentDate||""),y=String(b.accidentDate||"");return advSort==="accident_asc"?x.localeCompare(y):y.localeCompare(x)}
+    return new Date(b.updatedAt||b.createdAt||0)-new Date(a.updatedAt||a.createdAt||0);
+   });
+   return list;
+ }
+ function renderAdvancedTable(){
+   const tbody=$("recordsTableBody");if(!tbody)return;
+   const list=advancedList(), total=list.length, pages=Math.max(1,Math.ceil(total/advPageSize));advPage=Math.min(Math.max(1,advPage),pages);
+   const start=(advPage-1)*advPageSize, page=list.slice(start,start+advPageSize);
+   const info=$("advancedResultInfo");if(info)info.textContent=`Showing ${total?start+1:0}- ${Math.min(start+page.length,total)} of ${total} matching case(s)`;
+   const sum= $("filterSummary");if(sum){const active=Object.entries(advFilters).filter(([,v])=>v).length;sum.textContent=active?` ${active} filter(s) applied.`:"No advanced filters applied."}
+   if(!page.length){tbody.innerHTML='<tr><td colspan="11" class="empty"><div class="empty-state"><div class="icon">🔍</div>No records match the current search / filters.</div></td></tr>';renderPagination(total,pages);return}
+   tbody.innerHTML=page.map(r=>{const next=hearingDate(r);return `<tr>
+    <td><input type="checkbox" class="record-check" value="${esc(r.recordId)}"></td>
+    <td><div class="case-link" data-view="${esc(r.recordId)}"> ${esc(r.caseTitle||"Untitled Case")}${String(r.locked)==="YES"?' 🔒':''}</div><div style="font-size:10px;color:#64748b;margin-top:3px">ID: ${esc(String(r.recordId).slice(0,12))}</div></td>
+    <td>${esc(r.mactNo||"—")}</td><td> ${esc(r.claimantName||"—")}</td><td>${esc(formatDate(r.accidentDate)||"—")}</td>
+    <td>${esc(r.vehicleNo||"—")}<br> ${esc(r.vehicleType||"")}</td><td>${esc(r.insuranceCo||"—")}</td><td> ${esc(formatDate(next)||"—")}</td>
+    <td>${statusBadge(r.finalStatus||r.judgementStatus)}</td>
+    <td>${r.judgmentPdfUrl?`<button type="button" class="btn btn-light btn-sm pdf-open" data-id="${esc(r.recordId)}">📄 View</button>`:'<span style="color:#94a3b8">No PDF</span>'}<button type="button" class="btn btn-light btn-sm adv-docs" data-docs="${esc(r.recordId)}" style="margin-top:4px">📁 Docs ${Array.isArray(r.documents)&&r.documents.length?' $('+r.documents.length+')':''}</button></td>
+    <td><div style="display:flex;gap:5px;flex-wrap:wrap"><button type="button" class="btn btn-primary btn-sm" data-edit="${esc(r.recordId)}">Edit</button><button type="button" class="btn btn-warning btn-sm" data-hearing="${esc(r.recordId)}">Date</button><button type="button" class="btn btn-danger btn-sm" data-delete="${esc(r.recordId)}">Delete</button></div></td>
+   </tr>`}).join("");
+   renderPagination(total,pages);
+ }
+ function renderPagination(total,pages){const box=$("advancedPagination");if(!box)return;let b='';for(let i=1;i<=pages&&i<=12;i++)b+=`<button type="button" class="btn ${i===advPage?'btn-success':'btn-light'} btn-sm" data-page="${i}">${i}</button>`;box.innerHTML=`<span class="adv-muted">Page ${advPage} / ${pages} • ${total} results</span><div class="adv-page-buttons"><button type="button" class="btn btn-light btn-sm" data-page="prev">‹</button> ${b}<button type="button" class="btn btn-light btn-sm" data-page="next">›</button></div>`}
+ renderTable=renderAdvancedTable;
+ function bind(id,event,fn){const el=$(id);if(el)el.addEventListener(event,fn)}
+ function syncAfterMutation(msg){saveLocal();renderAll();if(msg)toast(msg);if(typeof syncCloud==="function")syncCloud()}
+ function addAudit(action,id,details){try{const arr=safeJson(localStorage.getItem(AUDIT_KEY),[]);arr.unshift({id:uid(),time:nowISO(),action,recordId:id||"",details:details||""});localStorage.setItem(AUDIT_KEY,JSON.stringify(arr.slice(0,500)));}catch(e){}}
+ function getSelectedIds(){return [...document.querySelectorAll(".record-check:checked")].map(x=>String(x.value))}
+ function refreshBackupKpis(){const b= $("backupCount"),s= $("backupSize"),l=$("backupLast");if(b)b.textContent=records.length;let size=0;try{size=new Blob([JSON.stringify({records,sections,audit:safeJson(localStorage.getItem(AUDIT_KEY),[])})]).size/1024}catch(e){}if(s)s.textContent=size.toFixed(1)+" KB";if(l)l.textContent=localStorage.getItem("mact_last_local_backup")||"Never"}
+ function downloadJsonBackup(){const payload={schema:2,app:"MACT Legal Portal",exportedAt:nowISO(),records,sections,customFields:safeJson(localStorage.getItem(CUSTOM_FIELDS_KEY),[]),layout:safeJson(localStorage.getItem(LAYOUT_STORAGE_KEY),null),audit:safeJson(localStorage.getItem(AUDIT_KEY),[])};downloadBlob(new Blob([JSON.stringify(payload,null,2)],{type:"application/json"}),`MACT_Backup_${localDate()}.json`);localStorage.setItem("mact_last_local_backup",new Date().toLocaleString());refreshBackupKpis();toast("JSON backup downloaded.")}
+ function restoreJson(file){const rd=new FileReader();rd.onload=()=>{try{const p=JSON.parse(rd.result);if(!Array.isArray(p.records))throw new Error("Invalid backup");let added=0,updated=0;const map=new Map(records.map(r=>[String(r.recordId),r]));p.records.forEach(x=>{if(!x||typeof x!=="object")return;x.recordId=x.recordId||uid();x.updatedAt=x.updatedAt||nowISO();if(map.has(String(x.recordId))){const old=map.get(String(x.recordId));Object.assign(old,x);updated++}else{map.set(String(x.recordId),x);added++}});records=[...map.values()];if(Array.isArray(p.customFields))localStorage.setItem(CUSTOM_FIELDS_KEY,JSON.stringify(p.customFields));if(Array.isArray(p.layout))localStorage.setItem(LAYOUT_STORAGE_KEY,JSON.stringify(p.layout));if(Array.isArray(p.audit))localStorage.setItem(AUDIT_KEY,JSON.stringify(p.audit));loadSavedLayout();loadCustomFields();renderForm();syncAfterMutation(`Backup restored: ${added} added, ${updated} updated.`)}catch(e){console.error(e);toast("Restore failed: invalid JSON backup.")}};rd.readAsText(file)}
+ function openDuplicates(){const groups={};records.forEach(r=>{const keys=[];if(r.mactNo)keys.push("MACT No.: "+String(r.mactNo).trim().toLowerCase());if(r.fileNumber)keys.push("File No.: "+String(r.fileNumber).trim().toLowerCase());if(r.vehicleNo&&r.accidentDate)keys.push("Vehicle + Accident: "+String(r.vehicleNo).trim().toLowerCase()+"|"+r.accidentDate);keys.forEach(k=>(groups[k]||(groups[k]=[])).push(r))});const dup=Object.entries(groups).filter(([,v])=>v.length>1);$("duplicatesBody").innerHTML=dup.length?dup.map(([k,arr])=>`<div class="adv-panel"><strong>⚠️ ${esc(k)}</strong> ${arr.map(r=>`<div style="display:flex;justify-content:space-between;gap:8px;padding:7px 0;border-top:1px solid #e2e8f0"><span>${esc(r.caseTitle||r.claimantName||"Untitled")} — ${esc(r.mactNo||"")}</span><button type="button" class="btn btn-light btn-sm" data-dup-view="${esc(r.recordId)}">Open</button></div>`).join("")}</div>`).join(""):'<div class="empty">No likely duplicates found.</div>';openModal("duplicatesModal")}
+ function openAnalytics(){const active=records.filter(r=>{const s=String(r.finalStatus||r.judgementStatus||"").toLowerCase();return !/closed|disposed|settled/.test(s)}).length;const pending=records.filter(r=>String(r.finalStatus||r.judgementStatus||"").toLowerCase().includes("pending")).length;const hearings=getAllHearings();const today=hearings.filter(x=>x.date===localDate()).length;const next7=hearings.filter(x=>{const d=daysFromToday(x.date);return d!==null&&d>=0&&d<=7}).length;const pdf=records.filter(r=>r.judgmentPdfUrl).length;const types={};records.forEach(r=>types[r.accidentType||"Unknown"]=(types[r.accidentType||"Unknown"]||0)+1);const ins={};records.forEach(r=>{const k=r.insuranceCo||"Not entered";ins[k]=(ins[k]||0)+1}); $("analyticsBody").innerHTML=`<div class="adv-kpis"><div class="adv-kpi"><b> ${records.length}</b><span>Total Cases</span></div><div class="adv-kpi"><b>${active}</b><span>Active</span></div><div class="adv-kpi"><b> ${pending}</b><span>Pending</span></div><div class="adv-kpi"><b>${today}</b><span>Today's Hearings</span></div><div class="adv-kpi"><b> ${next7}</b><span>Next 7 Days</span></div><div class="adv-kpi"><b>${pdf}</b><span>Judgment PDFs</span></div></div><div class="section"><div class="section-title">Accident Type Breakdown</div><div class="section-body"> ${Object.entries(types).map(([k,v])=>`<div style="display:flex;justify-content:space-between;padding:6px;border-bottom:1px solid #eee"><span>${esc(k)}</span><b> ${v}</b></div>`).join("")||"None"}</div></div><div class="section"><div class="section-title">Top Insurance Companies</div><div class="section-body">${Object.entries(ins).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([k,v])=>`<div style="display:flex;justify-content:space-between;padding:6px;border-bottom:1px solid #eee"><span> ${esc(k)}</span><b>${v}</b></div>`).join("")}</div></div>`;openModal("analyticsModal")}
+ function openDocs(id){const r=getRecord(id);if(!r)return;currentDocsRecordId=id;if(!Array.isArray(r.documents))r.documents=[]; $("documentsCaseTitle").textContent=` ${r.caseTitle||"Untitled Case"} • ${r.mactNo||""}`;renderDocs();openModal("documentsModal")}
+ function renderDocs(){const r=getRecord(currentDocsRecordId);const box= $("documentsList");if(!r||!box)return;box.innerHTML=r.documents?.length?r.documents.map((d,i)=>`<div class="adv-doc"><div><strong> ${esc(d.name)}</strong><div class="adv-muted">${esc(d.type||"file")} • ${(Number(d.size||0)/1024).toFixed(1)} KB • ${esc(d.addedAt||"")}</div></div><div><button type="button" class="btn btn-light btn-sm" data-doc-open="${i}">Open</button> <button type="button" class="btn btn-danger btn-sm" data-doc-delete="${i}">Delete</button></div></div>`).join(""):'<div class="empty">No additional documents attached.</div>'}
+ function openDoc(i){const r=getRecord(currentDocsRecordId),d=r?.documents?.[i];if(!d?.data)return;const w=window.open();if(!w){toast("Please allow popups to open the document.");return}if(d.type==="application/pdf"||String(d.type).startsWith("image/")){w.document.write(`<iframe src="${d.data}" style="border:0;width:100vw;height:100vh"></iframe>`)}else{const a=w.document.createElement("a");a.href=d.data;a.download=d.name;a.textContent="Download "+d.name;w.document.body.appendChild(a)}w.document.close()}
+ function addDoc(){const input=$("caseDocumentInput"),file=input?.files?.[0],r=getRecord(currentDocsRecordId);if(!file||!r)return;if(file.size>2*1024*1024){toast("Document too large. Maximum 2 MB per additional document.");return}const rd=new FileReader();rd.onload=()=>{if(!Array.isArray(r.documents))r.documents=[];if(r.documents.length>=10){toast("Maximum 10 additional documents per case.");return}r.documents.push({id:uid(),name:file.name,type:file.type||"application/octet-stream",size:file.size,addedAt:nowISO(),data:rd.result});r.updatedAt=nowISO();addAudit("Document added",r.recordId,file.name);saveLocal();renderDocs();renderAll();input.value="";toast("Document added.");syncCloud()};rd.readAsDataURL(file)}
+ function timelineHtml(r){const events=[];(r.createdAt||r.timestamp)&&events.push({date:r.createdAt||new Date(r.timestamp).toISOString(),title:"Case created",notes:"Record created"});(r.proceedings||[]).forEach((p,i)=>events.push({date:p.proceedingDate||p.nextDate||"",title:`Proceeding ${i+1}`,notes:p.notes||"",next:p.nextDate}));if(r.dateJudgementCompromise)events.push({date:r.dateJudgementCompromise,title:"Judgment / Compromise",notes:r.compensationAmount?`Amount: ${r.compensationAmount}`:""});if(r.updatedAt)events.push({date:r.updatedAt,title:"Last updated",notes:"Record modified"});events.sort((a,b)=>String(b.date).localeCompare(String(a.date)));return events.map(e=>`<div class="adv-timeline-item"><strong> ${esc(e.title)}</strong><div class="adv-muted">${esc(e.date?formatDate(String(e.date).slice(0,10)):"—")} ${e.next?' → Next: '+esc(formatDate(e.next)):''}</div><div>${esc(e.notes||"")}</div></div>`).join("")||'<div class="empty">No timeline events.</div>'}
+ function enhanceDetail(id){const r=getRecord(id);if(!r)return;const body= $("fileDetailBody");if(!body)return;const block=`<div class="section"><div class="section-title">🕘 Case Timeline</div><div class="section-body"><div class="adv-timeline"> ${timelineHtml(r)}</div></div></div><div class="section"><div class="section-title">📁 Documents</div><div class="section-body"><button type="button" class="btn btn-light" data-open-docs-detail="${esc(r.recordId)}">📁 Manage Documents ( ${r.documents?.length||0})</button></div></div>`;body.insertAdjacentHTML("beforeend",block);const procSection=[...body.querySelectorAll(".section")].find(x=>x.textContent.includes("Proceedings"));if(procSection){const items=procSection.querySelectorAll(".proceeding");items.forEach((item,i)=>{item.insertAdjacentHTML("beforeend",`<div style="margin-top:8px;display:flex;gap:6px"><button type="button" class="btn btn-light btn-sm" data-proc-edit="${i}">✏️ Edit</button><button type="button" class="btn btn-danger btn-sm" data-proc-delete="${i}">🗑️ Delete</button></div>`)})}}
+ openDetail=function(id){originalOpenDetail(id);setTimeout(()=>enhanceDetail(id),0)};
+ editRecord=function(id){const r=getRecord(id);if(r&&String(r.locked)==="YES"){if(!confirm("This record is LOCKED. Unlock it and continue editing?"))return;r.locked="NO";r.updatedAt=nowISO();saveLocal()}originalEditRecord(id)};
+ deleteRecord=function(id){const r=getRecord(id);if(!r)return;if(String(r.locked)==="YES"){toast("Locked record cannot be deleted. Unlock it first.");return}if(!confirm(`Move this record to Recycle Bin?\n\n${r.caseTitle||r.claimantName||r.mactNo||"Selected Case"}`))return;advDeleted={record:JSON.parse(JSON.stringify(r)),deletedAt:nowISO()};try{localStorage.setItem(TRASH_KEY,JSON.stringify(advDeleted))}catch(e){}r.deleted=true;r.deletedAt=advDeleted.deletedAt;r.deleteSource="user";r.updatedAt=nowISO();addAudit("Record deleted",r.recordId,r.caseTitle||r.mactNo||"");saveLocal();renderAll();showUndoToast();syncCloud()};
+function showUndoToast(){const t=$("toast");if(!t)return;t.textContent="Record deleted. Click here within 10 seconds to Undo.";t.classList.add("show");clearTimeout(showUndoToast.timer);t.onclick=()=>{if(!advDeleted)return;const r=getRecord(advDeleted.record.recordId);if(r){r.deleted=false;r.deletedAt="";r.deleteSource="";r.restoredAt=nowISO();r.updatedAt=nowISO();saveLocal();renderAll();addAudit("Record restored",""+r.recordId,"Undo delete");toast("Delete undone.");syncCloud()}advDeleted=null;t.onclick=null;t.classList.remove("show")};showUndoToast.timer=setTimeout(()=>{t.onclick=null;advDeleted=null;t.classList.remove("show")},10000)}
+bind("toggleFiltersBtn","click",()=>{ $("advancedFiltersPanel").hidden=! $("advancedFiltersPanel").hidden});
+ bind("applyFiltersBtn","click",()=>{advFilters={status: $("filterStatus").value,accident: $("filterAccident").value,vehicle: $("filterVehicle").value,insurance: $("filterInsurance").value.trim(),from: $("filterAccidentFrom").value,to: $("filterAccidentTo").value,hearing: $("filterHearing").value,priority: $("filterPriority").value,pdf:$("filterPdf").value};advPage=1;advSave();renderTable()});
+ bind("clearFiltersBtn","click",()=>{advFilters={status:"",accident:"",vehicle:"",insurance:"",from:"",to:"",hearing:"",priority:"",pdf:""};["filterStatus","filterAccident","filterVehicle","filterInsurance","filterAccidentFrom","filterAccidentTo","filterHearing","filterPriority","filterPdf"].forEach(id=>{const e=$(id);if(e)e.value=""});advPage=1;advSave();renderTable()});
+ ["sortRecords","pageSize"].forEach(id=>bind(id,"change",e=>{if(id==="sortRecords")advSort=e.target.value;else advPageSize=Number(e.target.value)||25;advPage=1;advSave();renderTable()}));
+ bind("selectVisibleBtn","click",()=>document.querySelectorAll("#recordsTableBody .record-check").forEach(x=>x.checked=true));bind("clearSelectionBtn","click",()=>document.querySelectorAll(".record-check").forEach(x=>x.checked=false));
+ bind("bulkEditBtn","click",()=>{const ids=getSelectedIds();if(!ids.length){toast("Select records first.");return} $("bulkEditCount").textContent=` ${ids.length} record(s) selected.`;openModal("bulkEditModal")});
+ bind("bulkEditForm","submit",e=>{e.preventDefault();const ids=getSelectedIds();let n=0;ids.forEach(id=>{const r=getRecord(id);if(!r||String(r.locked)==="YES")return;if( $("bulkFinalStatus").value)r.finalStatus= $("bulkFinalStatus").value;if( $("bulkImportance").value)r.importanceLevel= $("bulkImportance").value;if( $("bulkInsurance").value.trim())r.insuranceCo= $("bulkInsurance").value.trim();if( $("bulkRepresentation").value.trim())r.ourSideRepresentation= $("bulkRepresentation").value.trim();r.updatedAt=nowISO();addAudit("Bulk edit",id,"Multiple fields updated");n++});closeModal("bulkEditModal");syncAfterMutation(`${n} record(s) updated.`)});
+ bind("duplicatesBtn","click",openDuplicates);bind("caseAnalyticsBtn","click",openAnalytics);bind("backupBtn","click",()=>{refreshBackupKpis();openModal("backupModal")});bind("downloadJsonBackupBtn","click",downloadJsonBackup);bind("downloadCsvAdvancedBtn","click",()=> $("exportCsvBtn")?.click());bind("restoreJsonBtn","click",()=>{const f= $("restoreJsonInput")?.files?.[0];if(!f){toast("Choose a JSON backup first.");return}if(confirm("Restore this backup by merging it into current records?"))restoreJson(f)});
+ bind("enableNotificationsBtn","click",async()=>{if(!("Notification" in window)){toast("Browser notifications are not supported here.");return}try{const p=await Notification.requestPermission();if(p==="granted"){localStorage.setItem("mact_notifications","1");toast("Hearing notifications enabled.");checkBrowserHearingAlerts()}else toast("Notification permission was not granted.")}catch(e){toast("Could not enable notifications.")}});
+ bind("addCaseDocumentBtn","click",addDoc);
+ $("advancedPagination")?.addEventListener("click",e=>{const b=e.target.closest("[data-page]");if(!b)return;const list=advancedList(),pages=Math.max(1,Math.ceil(list.length/advPageSize));const v=b.dataset.page;if(v==="prev")advPage=Math.max(1,advPage-1);else if(v==="next")advPage=Math.min(pages,advPage+1);else advPage=Number(v);renderTable()});
+ $("recordsTableBody")?.addEventListener("click",e=>{const d=e.target.closest("[data-docs]");if(d){openDocs(d.dataset.docs);return}});
+ document.addEventListener("click",e=>{
+  const dv=e.target.closest("[data-dup-view]");if(dv){closeModal("duplicatesModal");openDetail(dv.dataset.dupView);return}
+  const od=e.target.closest("[data-open-docs-detail]");if(od){openDocs(od.dataset.openDocsDetail);return}
+  const de=e.target.closest("[data-doc-open]");if(de){openDoc(Number(de.dataset.docOpen));return}
+  const dd=e.target.closest("[data-doc-delete]");if(dd){const r=getRecord(currentDocsRecordId);if(!r)return;if(confirm("Delete this document attachment?")){r.documents.splice(Number(dd.dataset.docDelete),1);r.updatedAt=nowISO();addAudit("Document deleted",r.recordId,"Attachment removed");saveLocal();renderDocs();renderAll();syncCloud()}}return
+  const pe=e.target.closest("[data-proc-edit]");if(pe){const r=getRecord(currentRecordId);if(!r)return;selectedProceedingRecordId=r.recordId;const p=r.proceedings?.[Number(pe.dataset.procEdit)];if(!p)return; $("editingProceedingIndex").value=pe.dataset.procEdit; $("editPDate").value=p.proceedingDate||""; $("editPNext").value=p.nextDate||""; $("editPNotes").value=p.notes||"";openModal("proceedingEditModal");return}
+  const pd=e.target.closest("[data-proc-delete]");if(pd){const r=getRecord(currentRecordId);const i=Number(pd.dataset.procDelete);if(!r||!r.proceedings?.[i])return;if(confirm("Delete this proceeding?")){r.proceedings.splice(i,1);r.updatedAt=nowISO();addAudit("Proceeding deleted",r.recordId,"Proceeding "+(i+1));saveLocal();renderAll();openDetail(r.recordId);syncCloud()}}return
+ });
+ bind("proceedingEditForm","submit",e=>{e.preventDefault();const r=getRecord(selectedProceedingRecordId),i=Number( $("editingProceedingIndex").value);if(!r||!r.proceedings?.[i])return;r.proceedings[i]={proceedingDate: $("editPDate").value,nextDate: $("editPNext").value,notes: $("editPNotes").value.trim()};r.updatedAt=nowISO();addAudit("Proceeding edited",r.recordId,"Proceeding "+(i+1));saveLocal();closeModal("proceedingEditModal");renderAll();openDetail(r.recordId);syncCloud();toast("Proceeding updated.")});
+ function checkBrowserHearingAlerts(){if(localStorage.getItem("mact_notifications")!=="1"||!window.Notification||Notification.permission!=="granted")return;const today=localDate();const key="mact_notified_hearings_"+today;if(localStorage.getItem(key)==="1")return;const arr=getAllHearings().filter(x=>x.date===today);if(arr.length){new Notification("MACT Hearing Alert",{body:`You have ${arr.length} hearing(s) today.`});localStorage.setItem(key,"1")}}
+ advLoad();
+ document.addEventListener("DOMContentLoaded",()=>{setTimeout(()=>{const ss= $("sortRecords"),ps= $("pageSize");if(ss)ss.value=advSort;if(ps)ps.value=String(advPageSize);Object.entries(advFilters).forEach(([k,v])=>{const map={status:"filterStatus",accident:"filterAccident",vehicle:"filterVehicle",insurance:"filterInsurance",from:"filterAccidentFrom",to:"filterAccidentTo",hearing:"filterHearing",priority:"filterPriority",pdf:"filterPdf"};if($(map[k])) $(map[k]).value=v});renderTable();checkBrowserHearingAlerts()},500)});
+ setInterval(checkBrowserHearingAlerts,60000);
+ window.MACTAdvanced={filters:()=>({...advFilters}),getFilteredRecords:advancedList,downloadBackup:downloadJsonBackup,openDocuments:openDocs,findDuplicates:openDuplicates,analytics:openAnalytics};
+})();
+
+
+
+/* ===== CLOUD-AWARE RECYCLE BIN ===== */
+(function(){
+ "use strict";
+ function deleted(){return records.filter(r=>r.deleted||r.deletedAt).sort((a,b)=>String(b.deletedAt||b.updatedAt||"").localeCompare(String(a.deletedAt||a.updatedAt||"")));}
+ function renderTrash(){const box= $("recycleBinBody");if(!box)return;const arr=deleted();if(!arr.length){box.innerHTML='<div class="adv-panel">🟢 Recycle Bin is empty.</div>';return;}box.innerHTML=arr.map(r=>`<div class="adv-doc"><div><strong> ${escapeHtml(r.caseTitle||r.claimantName||"Untitled Case")}</strong><div class="adv-muted">MACT: ${escapeHtml(r.mactNo||"—")} • Deleted: ${escapeHtml(r.deletedAt||"")}</div></div><button type="button" class="btn btn-success btn-sm" data-trash-restore="${escapeHtml(r.recordId)}">♻️ Restore</button></div>`).join("");}
+ function restoreOne(id){const r=getRecord(id);if(!r)return;r.deleted=false;r.deletedAt="";r.deleteSource="";r.restoredAt=nowISO();r.updatedAt=nowISO();addAudit("Record restored",r.recordId,"Recycle Bin");saveLocal();renderAll();renderTrash();toast("Record restored.");syncCloud();}
+ $("recycleBinBtn")?.addEventListener("click",()=>{renderTrash();openModal("recycleBinModal")});
+ $("restoreAllTrashBtn")?.addEventListener("click",()=>{const arr=deleted();if(!arr.length){toast("Recycle Bin is empty.");return}if(!confirm(`Restore ${arr.length} deleted record(s)?`))return;const t=nowISO();arr.forEach(r=>{r.deleted=false;r.deletedAt="";r.deleteSource="";r.restoredAt=t;r.updatedAt=t;addAudit("Record restored",r.recordId,"Restore All")});saveLocal();renderAll();renderTrash();toast(` ${arr.length} record(s) restored.`);syncCloud();});
+ $("emptyTrashBtn")?.addEventListener("click",()=>{const arr=deleted();if(!arr.length){toast("Recycle Bin is empty.");return}if(!confirm(`Permanently remove ${arr.length} deleted local record(s)?\n\nCloud copies will remain until explicitly purged there.`))return;records=records.filter(r=>!r.deleted&&!r.deletedAt);saveLocal();renderAll();renderTrash();toast("Local Recycle Bin emptied.");syncCloud();});
+ document.addEventListener("click",e=>{const b=e.target.closest("[data-trash-restore]");if(b)restoreOne(b.dataset.trashRestore)});
+ window.MACTRecycleBin={render:renderTrash,restoreOne};
+})();
+
+/* ===== LOCAL PIN LOCK — robust v6 ===== */
+(function(){
+ const PIN_KEY="mact_local_pin_v1", LOCKED_KEY="mact_local_locked_v1";
+ const $id=id=>document.getElementById(id);
+ const hasPin=()=>String(localStorage.getItem(PIN_KEY)||"").length>=4;
+ function setInteraction(locked){
+   document.body.dataset.appLocked=locked?"1":"0";
+   document.documentElement.classList.toggle("mact-locked",locked);
+   document.querySelectorAll("body > *:not(#pinUnlockModal)").forEach(x=>{
+     x.style.pointerEvents=locked?"none":"";
+     x.setAttribute("aria-hidden",locked?"true":"false");
+   });
+   const modal=$id("pinUnlockModal");
+   if(modal){
+     modal.style.pointerEvents="auto";
+     modal.style.zIndex="99999";
+   }
+ }
+ function updateLockStatus(){
+   const e=$id("lockStatus");
+   if(e)e.textContent=hasPin()?"PIN lock configured":"No PIN lock";
+ }
+ function showUnlock(){
+   if(!hasPin() || localStorage.getItem(LOCKED_KEY)!=="1") return;
+   setInteraction(true);
+   const m=$id("pinUnlockModal");
+   if(m){m.classList.add("show");m.style.display="flex";}
+   const inp=$id("unlockPin");
+   if(inp){inp.value="";setTimeout(()=>inp.focus(),80);}
+ }
+ function unlock(){
+   const inp=$id("unlockPin"), msg=$id("unlockMsg");
+   const entered=String(inp?.value||"").trim();
+   const saved=String(localStorage.getItem(PIN_KEY)||"").trim();
+   if(entered && entered===saved){
+     localStorage.removeItem(LOCKED_KEY);
+     setInteraction(false);
+     const m=$id("pinUnlockModal");
+     if(m){m.classList.remove("show");m.style.display="none";}
+     if(inp)inp.value="";
+     if(msg)msg.textContent="";
+     toast("App unlocked successfully.");
+   }else{
+     if(msg)msg.textContent="Incorrect PIN. Please try again.";
+     if(inp){inp.value="";inp.focus();}
+   }
+ }
+ function lockNow(){
+   if(hasPin()){
+     localStorage.setItem(LOCKED_KEY,"1");
+     showUnlock();
+   }
+ }
+ function init(){
+   updateLockStatus();
+   $id("securityBtn")?.addEventListener("click",()=>{updateLockStatus();openModal("securityModal")});
+   $id("savePinBtn")?.addEventListener("click",()=>{
+     const a=String($id("newPin")?.value||"").trim();
+     const b=String($id("confirmPin")?.value||"").trim();
+     if(!/^\d{4,8}$/.test(a)){toast("PIN must be 4–8 digits.");return;}
+     if(a!==b){toast("PIN confirmation does not match.");return;}
+     localStorage.setItem(PIN_KEY,a);
+     localStorage.setItem(LOCKED_KEY,"1");
+     if($id("newPin"))$id("newPin").value="";
+     if($id("confirmPin"))$id("confirmPin").value="";
+     updateLockStatus();closeModal("securityModal");showUnlock();
+   });
+   $id("removePinBtn")?.addEventListener("click",()=>{
+     if(!hasPin())return;
+     if(confirm("Remove local PIN lock?")){
+       localStorage.removeItem(PIN_KEY);localStorage.removeItem(LOCKED_KEY);
+       setInteraction(false);updateLockStatus();toast("PIN lock removed.");
+     }
+   });
+   $id("unlockBtn")?.addEventListener("click",unlock);
+   $id("unlockPin")?.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();unlock();}});
+   // Safety: delegated click handler ensures the Unlock button works even if dashboard UI is re-rendered.
+   document.addEventListener("click",e=>{if(e.target.closest("#unlockBtn")){e.preventDefault();unlock();}});
+   window.addEventListener("beforeunload",()=>{if(hasPin())localStorage.setItem(LOCKED_KEY,"1")});
+   setTimeout(showUnlock,250);
+ }
+ if(document.readyState==="loading") document.addEventListener("DOMContentLoaded",init,{once:true}); else init();
+ window.MACTLock={lock:lockNow,unlock,showUnlock,updateLockStatus};
+})();
+
+// Keyboard shortcuts
+document.addEventListener("keydown", e => {
+  // Ctrl/Cmd + K → focus search
+  if((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k"){
+    e.preventDefault();
+    const s = $("globalSearchInput");
+    if(s){ s.focus(); s.select(); }
+  }
+  // Esc → close topmost modal
+  if(e.key === "Escape"){
+    const openModals = [...document.querySelectorAll(".modal.show")];
+    if(openModals.length){
+      const top = openModals[openModals.length-1];
+      top.classList.remove("show");
+    }
+  }
+});
+
+</script>
+</div>
+<script>
+(function(){
+ function $(id){return document.getElementById(id)}
+ window.mactGo=function(id){
+   if(id==='cases'){document.querySelector('.card')?.scrollIntoView({behavior:'smooth',block:'start'});}
+   else if(id==='hearings'){document.getElementById('hearingList')?.scrollIntoView({behavior:'smooth',block:'center'});}
+   else if(id==='clients'){document.querySelector('.card')?.scrollIntoView({behavior:'smooth',block:'start'});}
+   else document.getElementById(id)?.scrollIntoView({behavior:'smooth',block:'start'});
+   document.querySelectorAll('.mact-nav button').forEach(b=>b.classList.remove('active'));
+   const t=[...document.querySelectorAll('.mact-nav button')].find(b=>b.textContent.toLowerCase().includes(id==='cases'?'case':id==='hearings'?'hearing':id==='clients'?'client':'dashboard'));
+   if(t)t.classList.add('active');
+ };
+ window.mactOpen=function(id){ const el=$(id); if(el){el.click();return;} if(id==='analyticsBtn'&&typeof openAnalytics==='function'){openAnalytics();return;} if(id==='documentsBtn'&&typeof openDocs==='function'){ const r=(window.currentRecordId||window.records?.find(x=>!x.deleted)?.recordId); if(r) openDocs(r); else toast?.('Open a case first to manage documents.'); return;} };
+ window.mactToggleDark=function(){
+   document.body.classList.toggle('mact-dark');
+   localStorage.setItem('mact_dark_mode',document.body.classList.contains('mact-dark')?'1':'0');
+ };
+ if(localStorage.getItem('mact_dark_mode')==='1') document.body.classList.add('mact-dark');
+
+ window.mactRefreshDashboard=function(){
+   try{
+    const active=(window.records||[]).filter(r=>!r.deleted&&!r.deletedAt);
+    const hearings=[];
+    active.forEach(r=>(r.proceedings||[]).forEach(p=>{if(p.nextDate) hearings.push({r,date:p.nextDate,notes:p.notes||''})}));
+    hearings.sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+    const today=typeof localDate==='function'?localDate():new Date().toISOString().slice(0,10);
+    const todayN=hearings.filter(x=>x.date===today).length;
+    // Fixed: use correct status fields
+    const judgments=active.filter(r=>/judg|award/i.test(String(r.judgementStatus||r.finalStatus||''))).length;
+    const pending=active.filter(r=>{
+      const s=String(r.finalStatus||r.judgementStatus||'').toLowerCase();
+      return !/closed|disposed|settled|judgment/.test(s);
+    }).length;
+    [['dashTotal',active.length],['dashToday',todayN],['dashPending',pending],['dashJudgments',judgments]].forEach(([id,v])=>{if($(id)) $(id).textContent=v});
+    const h=$('dashHearings');
+    if(h){
+      const list=hearings.slice(0,7);
+      h.innerHTML=list.length?list.map(x=>{
+       const d=new Date(x.date+'T00:00:00'); const day=String(d.getDate()).padStart(2,'0'); const mon=d.toLocaleString('en-IN',{month:'short'});
+       return `<div class="mact-hearing-row"><div class="mact-date-box"><b>${day}</b><small> ${mon}</small></div><div class="mact-hearing-main"><strong>${escapeHtml(x.r.caseTitle||x.r.claimantName||'Untitled Case')}</strong><span> ${escapeHtml(x.r.mactNo||'MACT File')}${x.notes?' • '+escapeHtml(x.notes):''}</span></div><span class="mact-pill"> ${x.date===today?'TODAY':'NEXT'}</span></div>`;
+      }).join(''):'<div style="font-size:11px;color:var(--office-muted);padding:12px 0">No upcoming hearings recorded.</div>';
+    }
+    const statuses={Pending:0,Disposed:0,Judgment:0,Other:0};
+    active.forEach(r=>{
+      const st=String(r.finalStatus||r.judgementStatus||'').toLowerCase();
+      if(/disposed|closed/.test(st))statuses.Disposed++;
+      else if(/judg|award/.test(st))statuses.Judgment++;
+      else if(/pending|active/.test(st))statuses.Pending++;
+      else statuses.Other++;
+    });
+    const ds=$('dashStatus');
+    if(ds) ds.innerHTML=Object.entries(statuses).map(([k,v])=>`<div style="display:flex;justify-content:space-between;font-size:10px;margin:10px 0 5px"><span>${k}</span><b> ${v}</b></div><div class="mact-progress"><i style="width:${active.length?Math.round(v/active.length*100):0}%"></i></div>`).join('');
+    const workload=active.length?Math.round(pending/active.length*100):0;if( $('dashWorkload')) $('dashWorkload').textContent=workload+'%';if( $('dashWorkloadBar')) $('dashWorkloadBar').style.width=workload+'%';
+    const bars= $('dashBars');if(bars){const vals=[active.length,todayN,pending,judgments];const labels=['Cases','Today','Pending','Judgments'];const max=Math.max(...vals,1);bars.innerHTML=vals.map((v,i)=>`<div class="mact-bar-col"><span class="mact-bar-val"> ${v}</span><div class="mact-bar" style="height:${Math.max(4,v/max*90)}px"></div><span class="mact-bar-label"> ${labels[i]}</span></div>`).join('')}
+   }catch(e){console.warn('Dashboard refresh',e)}
+ };
+ setTimeout(window.mactRefreshDashboard,300);
+ setInterval(window.mactRefreshDashboard,2500);
+})();
+</script>
+<script id="mact-v7-engine">
+(function(){
+"use strict";
+const V7_KEY="mact_v7_ui_state";
+const $=id=>document.getElementById(id);
+const safe=(fn,fallback)=>{try{return fn()}catch(e){console.warn("MACT V7:",e);return fallback}};
+const getRecords=()=>Array.isArray(window.records)?window.records:[];
+const active=()=>getRecords().filter(r=>!r.deleted&&!r.deletedAt);
+const today=()=>typeof localDate==="function"?localDate():new Date().toISOString().slice(0,10);
+function saveUI(){safe(()=>localStorage.setItem(V7_KEY,JSON.stringify({dark:document.body.classList.contains("mact-dark")})))}
+function openExisting(id){
+  const el=$(id);if(el&&typeof el.click==="function"){el.click();return true}
+  if(id==="analyticsBtn"&&typeof openAnalytics==="function"){openAnalytics();return true}
+  if(id==="documentsBtn"&&typeof openDocs==="function"){
+    const r=getRecords().find(x=>!x.deleted&&!x.deletedAt);if(r)openDocs(r.recordId);return true
+  }
+  return false;
+}
+const commands=[
+ ["New Case","Create a new MACT case file","N",()=>openExisting("openNewFileModalBtn")],
+ ["Add Hearing","Schedule a hearing / proceeding","H",()=>openExisting("topAddDateBtn")],
+ ["Search Cases","Jump to case register","S",()=>{mactGo("cases");setTimeout(()=>$("globalSearchInput")?.focus(),250)}],
+ ["Advanced Filters","Open advanced case filters","F",()=>openExisting("toggleFiltersBtn")],
+ ["Analytics","Open case analytics","A",()=>openExisting("caseAnalyticsBtn")],
+ ["Backup / Restore","Open backup center","B",()=>openExisting("backupBtn")],
+ ["Documents","Open document manager","D",()=>openExisting("documentsBtn")],
+ ["Petition Generator","Generate petition from current case","P",()=>openExisting("generatePetitionBtn")],
+ ["Print Hearing List","Open hearing print settings","R",()=>openExisting("printTodayHearingsBtn")],
+ ["Recycle Bin","Open deleted records","T",()=>openExisting("recycleBinBtn")],
+ ["Toggle Dark Mode","Switch light / dark theme","⌘D",()=>{mactToggleDark();saveUI()}],
+ ["Focus Case Search","Focus the main case search box","⌕",()=>$("globalSearchInput")?.focus()]
+];
+function renderCommands(q){
+  const box=$("v7CommandList");if(!box)return;
+  q=String(q||"").toLowerCase().trim();
+  const list=commands.filter(c=>(c[0]+" "+c[1]).toLowerCase().includes(q));
+  box.innerHTML=list.map((c,i)=>`<div class="v7-command-item ${i===0?"active":""}" data-cmd="${i}">
+    <div><b>${escapeHtml(c[0])}</b><span>${escapeHtml(c[1])}</span></div>
+    <span class="v7-command-kbd">${escapeHtml(c[2])}</span></div>`).join("") ||
+    `<div style="padding:18px;font-size:11px;color:var(--office-muted)">No command found.</div>`;
+  box.querySelectorAll(".v7-command-item").forEach(el=>{
+    el.onclick=()=>{const c=list[Number(el.dataset.cmd)];closePalette();c?.[3]?.()};
+  });
+}
+function openPalette(){
+  const p=$("v7CommandPalette");if(!p)return;
+  p.classList.add("show");p.setAttribute("aria-hidden","false");$("v7CommandInput").value="";
+  renderCommands("");setTimeout(()=>$("v7CommandInput")?.focus(),30);
+}
+function closePalette(){
+  const p=$("v7CommandPalette");if(!p)return;p.classList.remove("show");p.setAttribute("aria-hidden","true");
+}
+function updateClock(){
+  const el=$("v7Clock");if(el)el.textContent=new Date().toLocaleString("en-IN",{weekday:"short",day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"});
+}
+function updateSaveChip(){
+  const el=$("v7SaveChip");if(!el)return;
+  el.textContent=safe(()=>localStorage.getItem("mact_last_sync"),"")?"● Saved":"● Local";
+}
+function updateSmartAlert(){
+  const hs=[];active().forEach(r=>(r.proceedings||[]).forEach(p=>{if(p.nextDate)hs.push(p.nextDate)}));
+  const t=today(),urgent=hs.filter(d=>d<=t).length;
+  const next7=hs.filter(d=>d>t&&typeof daysFromToday==="function"&&daysFromToday(d)<=7).length;
+  const alert=$("v7SmartAlert"),text=$("v7AlertText");if(!alert||!text)return;
+  if(urgent){alert.classList.add("show");text.textContent=`${urgent} hearing(s) are due today or overdue.`}
+  else if(next7){alert.classList.add("show");text.textContent=`${next7} hearing(s) are scheduled within the next 7 days.`}
+  else alert.classList.remove("show");
+}
+function addLiveMiniStats(){
+  const host=$("advancedControlCard");if(!host||$("v7MiniStats"))return;
+  const el=document.createElement("div");el.id="v7MiniStats";el.className="v7-quick-stat";
+  el.innerHTML=`<div class="v7-mini"><b id="v7MiniActive">0</b><span>Active files</span></div>
+  <div class="v7-mini"><b id="v7MiniToday">0</b><span>Today hearings</span></div>
+  <div class="v7-mini"><b id="v7MiniOverdue">0</b><span>Overdue</span></div>
+  <div class="v7-mini"><b id="v7MiniDocs">0</b><span>Documents</span></div>`;
+  host.appendChild(el);
+}
+function updateMiniStats(){
+  addLiveMiniStats();const rs=active(),t=today();let todayN=0,overdue=0,docs=0;
+  rs.forEach(r=>{
+    (r.proceedings||[]).forEach(p=>{if(p.nextDate===t)todayN++;if(p.nextDate&&p.nextDate<t)overdue++});
+    docs+=(r.documents||r.docs||[]).length;
+  });
+  [["v7MiniActive",rs.length],["v7MiniToday",todayN],["v7MiniOverdue",overdue],["v7MiniDocs",docs]]
+    .forEach(([id,v])=>{if($(id))$(id).textContent=v});
+}
+function refresh(){updateClock();updateSaveChip();updateSmartAlert();updateMiniStats()}
+function init(){
+  const st=safe(()=>JSON.parse(localStorage.getItem(V7_KEY)||"{}"),{});
+  if(st.dark&&!document.body.classList.contains("mact-dark"))document.body.classList.add("mact-dark");
+  $("v7GlobalCommandSearch")?.addEventListener("focus",openPalette);
+  $("v7GlobalCommandSearch")?.addEventListener("keydown",e=>{if(e.key==="Enter")openPalette()});
+  $("v7CommandInput")?.addEventListener("input",e=>renderCommands(e.target.value));
+  $("v7CommandPalette")?.addEventListener("click",e=>{if(e.target.id==="v7CommandPalette")closePalette()});
+  $("v7FloatingBtn")?.addEventListener("click",openPalette);
+  $("v7AlertAction")?.addEventListener("click",()=>mactGo("hearings"));
+  document.addEventListener("keydown",e=>{
+    if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="k"){e.preventDefault();openPalette();return}
+    if(e.key==="Escape")closePalette();
+    if(e.key==="n"&&!/input|textarea|select/i.test(document.activeElement?.tagName||""))openExisting("openNewFileModalBtn");
+  });
+  refresh();setInterval(refresh,15000);
+}
+if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",init);else init();
+})();
+</script>
+
+
+<script id="mact-v7-runtime-guard">
+window.addEventListener("error",function(e){
+  console.error("MACT runtime error:",e.error||e.message);
+});
+window.addEventListener("unhandledrejection",function(e){
+  console.error("MACT promise error:",e.reason);
+});
+</script>
+
+
+<script>
+/* =========================
+   V9 Firebase Cloud Bridge
+   ========================= */
+(function(){
+  const state={applying:false,lastRemoteHash:""};
+  const $id=id=>document.getElementById(id);
+  const toastSafe=msg=>{try{if(typeof toast==="function")toast(msg);else console.log(msg)}catch(e){console.log(msg)}};
+  const uid=()=>crypto.randomUUID?crypto.randomUUID():"mact-"+Date.now()+"-"+Math.random().toString(36).slice(2);
+
+  function cloudReady(){return !!(window.MACTFirebase&&window.MACTFirebase.configured&&window.MACTFirebase.user);}
+  function cleanRecord(r){
+    const x=JSON.parse(JSON.stringify(r||{}));
+    x.recordId=String(x.recordId||x.timestamp||uid());
+    x.createdAt=x.createdAt||new Date().toISOString();
+    x.updatedAt=x.updatedAt||x.createdAt;
+    x.deleted=!!x.deleted;
+    x.deviceId=localStorage.getItem("mact_device_id")||(localStorage.setItem("mact_device_id",uid()),localStorage.getItem("mact_device_id"));
+    if(Array.isArray(x.documents))x.documents=x.documents.map(d=>{const z=Object.assign({},d);delete z.data;return z});
+    return x;
+  }
+  function hashRecords(list){
+    return JSON.stringify((list||[]).map(cleanRecord).sort((a,b)=>a.recordId.localeCompare(b.recordId)));
+  }
+  function mergeLWW(local,remote){
+    const map=new Map((local||[]).map(r=>[String(r.recordId),r]));
+    (remote||[]).forEach(rr=>{
+      const r=cleanRecord(rr), k=r.recordId, l=map.get(k);
+      if(!l){map.set(k,r);return}
+      const rt=new Date(r.updatedAt||0).getTime(), lt=new Date(l.updatedAt||0).getTime();
+      // Automatic conflict resolution: newest update wins.
+      // If timestamps tie, deviceId provides deterministic ordering.
+      if(rt>lt || (rt===lt && String(r.deviceId||"")>String(l.deviceId||""))) map.set(k,r);
+    });
+    return [...map.values()];
+  }
+  async function cloudWrite(){
+    if(!cloudReady()||state.applying)return false;
+    try{
+      const {db,user}=window.MACTFirebase;
+      const {doc,runTransaction,serverTimestamp}=window.MACTFirebase.__api;
+      const ref=doc(db,window.MACT_CLOUD_COLLECTION,user.uid);
+      const local=(typeof records!=="undefined"?records:[]).map(cleanRecord);
+      await runTransaction(db,async tx=>{
+        const snap=await tx.get(ref);
+        const remote=snap.exists()&&Array.isArray(snap.data().records)?snap.data().records:[];
+        const merged=mergeLWW(local,remote);
+        tx.set(ref,{
+          email:user.email||"",displayName:user.displayName||"",photoURL:user.photoURL||"",
+          records:merged,updatedAt:serverTimestamp(),schemaVersion:9
+        },{merge:true});
+      });
+      return true;
+    }catch(e){console.error("Cloud write:",e);toastSafe("Cloud save failed; local data is safe.");return false}
+  }
+  function applyRemote(data){
+    if(!data||!Array.isArray(data.records)||state.applying)return;
+    const remote=data.records.map(cleanRecord);
+    const local=(typeof records!=="undefined"?records:[]).map(cleanRecord);
+    const merged=mergeLWW(local,remote);
+    const h=hashRecords(merged);
+    if(h===state.lastRemoteHash)return;
+    state.lastRemoteHash=h;
+    if(hashRecords(local)===h)return;
+    state.applying=true;
+    try{
+      records=merged;
+      if(typeof saveLocal==="function")saveLocal();
+      if(typeof renderAll==="function")renderAll();
+      localStorage.setItem("mact_last_sync",new Date().toLocaleString());
+      const st=$id("mactCloudState");if(st)st.textContent="● Synced";
+    }finally{state.applying=false}
+  }
+
+  window.addEventListener("mact-cloud-data",e=>applyRemote(e.detail&&e.detail.data));
+
+  window.addEventListener("mact-auth",async e=>{
+    const user=e.detail&&e.detail.user;
+    const gate=$id("mactAuthGate"),bar=$id("mactUserBar");
+    if(user){
+      if(gate)gate.style.display="none";
+      if(bar)bar.style.display="flex";
+      if($id("mactUserName"))$id("mactUserName").textContent=user.displayName||user.email||"Google user";
+      if($id("mactUserPhoto")&&user.photoURL){$id("mactUserPhoto").src=user.photoURL;$id("mactUserPhoto").style.display="block"}
+      const st=$id("mactCloudState");if(st)st.textContent="● Connecting";
+      await new Promise(r=>setTimeout(r,500));
+      await cloudWrite();
+      if(st)st.textContent="● Synced";
+    }else{
+      if(bar)bar.style.display="none";
+      // Don't lock out existing local users when Firebase is not configured.
+      if(window.MACTFirebase&&window.MACTFirebase.configured){
+        if(gate)gate.style.display="flex";
+      }
+    }
+  });
+
+  document.addEventListener("DOMContentLoaded",()=>{
+    $id("mactGoogleLogin")?.addEventListener("click",async()=>{
+      try{await window.mactGoogleLogin()}catch(e){
+        console.error(e);
+        const box=$id("mactAuthError");if(box){box.textContent=e.message||"Google sign-in failed";box.style.display="block"}
+      }
+    });
+    $id("mactGoogleLogout")?.addEventListener("click",()=>window.mactGoogleLogout&&window.mactGoogleLogout());
+    window.MACTFirebase=window.MACTFirebase||{};
+    // Expose Firestore functions used by the bridge without leaking credentials.
+    if(window.MACTFirebase.configured){
+      import("https://www.gstatic.com/firebasejs/12.2.1/firebase-firestore.js").then(api=>{
+        window.MACTFirebase.__api=api;
+      });
+    }
+    // Auto-save local mutations shortly after the app changes records.
+    let timer=0;
+    const schedule=()=>{
+      clearTimeout(timer);timer=setTimeout(()=>{if(cloudReady())cloudWrite()},900);
+    };
+    const oldSave=window.saveLocal;
+    if(typeof oldSave==="function"){
+      window.saveLocal=function(){const out=oldSave.apply(this,arguments);schedule();return out}
+    }
+  });
+})();
+</script>
+
+
+<script id="mact-v10-button-repair">
+(function(){
+  "use strict";
+
+  function el(id){ return document.getElementById(id); }
+  function safe(fn, msg){
+    try { return fn(); }
+    catch(e){
+      console.error("MACT V10 button error:", e);
+      if(typeof window.toast === "function") window.toast(msg || ("Action failed: " + (e.message || e)));
+      return false;
+    }
+  }
+  function call(fn, msg){
+    if(typeof fn !== "function"){
+      console.error("MACT V10 missing function:", msg);
+      if(typeof window.toast === "function") window.toast("Feature initialization failed. Please reload the portal.");
+      return false;
+    }
+    return safe(fn, msg);
+  }
+
+  function openNew(){
+    return call(window.openNewRecord, "Unable to open New Case.");
+  }
+
+  function addHearing(){
+    if(typeof window.openModal !== "function"){
+      return call(window.openHearingModal, "Unable to open Hearing.");
+    }
+    return safe(function(){
+      if(typeof window.populateHearingSelect === "function") window.populateHearingSelect("");
+      window.openModal("addDateModal");
+    }, "Unable to open Hearing.");
+  }
+
+  function bindDirect(id, fn){
+    var b=el(id);
+    if(!b) return;
+    b.addEventListener("click",function(e){
+      if(typeof b.onclick === "function") return;
+      var r=safe(fn,"Button action failed.");
+      if(r !== false) e.preventDefault();
+    },true);
+  }
+
+  function install(){
+    bindDirect("openNewFileModalBtn",openNew);
+    bindDirect("topAddDateBtn",addHearing);
+
+    bindDirect("googleLoginBtn",function(){
+      return call(window.connectCloud,"Cloud connection is not initialized.");
+    });
+    bindDirect("restoreCloudBtn",function(){
+      return call(window.restoreFromCloud,"Cloud restore is not initialized.");
+    });
+    bindDirect("recycleBinBtn",function(){
+      if(typeof window.renderTrash==="function" && typeof window.openModal==="function"){
+        window.renderTrash();
+        window.openModal("recycleBinModal");
+        return true;
+      }
+      return false;
+    });
+    bindDirect("addNewFieldBtn",function(){
+      return window.openModal ? safe(function(){window.openModal("customFieldModal")},"Unable to open Custom Field.") : false;
+    });
+    bindDirect("editLayoutBtn",function(){
+      return call(window.openLayoutEditor,"Unable to open Layout Editor.");
+    });
+    bindDirect("printFilteredRecordsBtn",function(){
+      return window.printFieldSelector ? safe(function(){window.printFieldSelector("list","")},"Unable to print register.") : false;
+    });
+    bindDirect("printTodayHearingsBtn",function(){
+      return call(window.openHearingPrintSettings,"Unable to open Hearing Print Settings.");
+    });
+
+    // Inline navigation fallback. Existing working onclick handlers are left alone.
+    document.addEventListener("click",function(e){
+      var b=e.target && e.target.closest ? e.target.closest("button") : null;
+      if(!b) return;
+      var inline=b.getAttribute("onclick") || "";
+      if(inline.indexOf("mactToggleDark")>=0 && typeof window.mactToggleDark==="function"){
+        e.preventDefault();
+        safe(window.mactToggleDark,"Theme change failed.");
+      }else if(inline.indexOf("mactGo(")>=0 && typeof window.mactGo==="function"){
+        var m=inline.match(/mactGo\(['"]([^'"]+)['"]\)/);
+        if(m){e.preventDefault();safe(function(){window.mactGo(m[1])},"Navigation failed.");}
+      }else if(inline.indexOf("mactOpen(")>=0 && typeof window.mactOpen==="function"){
+        var n=inline.match(/mactOpen\(['"]([^'"]+)['"]\)/);
+        if(n){e.preventDefault();safe(function(){window.mactOpen(n[1])},"Tool could not be opened.");}
+      }
+    },true);
+
+    setTimeout(function(){
+      var ok=typeof window.openNewRecord==="function" &&
+             typeof window.renderAll==="function" &&
+             !!el("openNewFileModalBtn");
+      if(!ok && typeof window.toast==="function"){
+        window.toast("Portal JavaScript did not initialize. Reload this V10 file.");
+      }
+    },1200);
+  }
+
+  if(document.readyState==="loading") document.addEventListener("DOMContentLoaded",install,{once:true});
+  else install();
+
+  window.MACTV10ButtonRepair={install:install};
+})();
+</script>
+
+
+<style id="mact-v11-advanced-css">
+#mactV11Fab{position:fixed;right:18px;bottom:88px;z-index:99990;border:0;border-radius:999px;padding:12px 16px;background:linear-gradient(135deg,#111827,#4f46e5);color:#fff;font-weight:800;box-shadow:0 12px 30px rgba(0,0,0,.22);cursor:pointer}
+#mactV11Fab:hover{transform:translateY(-2px)}
+#mactV11Overlay{display:none;position:fixed;inset:0;z-index:99980;background:rgba(15,23,42,.62);backdrop-filter:blur(5px);align-items:center;justify-content:center;padding:14px}
+#mactV11Overlay.show{display:flex}
+#mactV11Panel{width:min(1180px,100%);height:min(92vh,900px);background:var(--bg,#fff);color:var(--text,#111827);border-radius:18px;overflow:hidden;box-shadow:0 30px 90px rgba(0,0,0,.35);display:flex;flex-direction:column}
+#mactV11Head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;border-bottom:1px solid rgba(148,163,184,.25)}
+#mactV11Head h2{margin:0;font-size:19px}
+#mactV11Close{border:0;background:transparent;font-size:25px;cursor:pointer;color:inherit}
+#mactV11Body{padding:16px;overflow:auto}
+.m11-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px}
+.m11-card{border:1px solid rgba(148,163,184,.28);border-radius:14px;padding:13px;background:rgba(148,163,184,.06)}
+.m11-card .n{font-size:25px;font-weight:900}.m11-card .l{font-size:12px;opacity:.72;margin-top:3px}
+.m11-section{border:1px solid rgba(148,163,184,.28);border-radius:14px;padding:14px;margin-top:12px}
+.m11-section h3{margin:0 0 10px;font-size:15px}
+.m11-actions{display:flex;flex-wrap:wrap;gap:8px}
+.m11-btn{border:1px solid rgba(148,163,184,.35);background:rgba(148,163,184,.08);color:inherit;border-radius:9px;padding:8px 11px;cursor:pointer;font-weight:700}
+.m11-btn.primary{background:#4f46e5;color:#fff;border-color:#4f46e5}
+.m11-btn.danger{background:#dc2626;color:#fff;border-color:#dc2626}
+.m11-table{width:100%;border-collapse:collapse;font-size:12px}.m11-table th,.m11-table td{padding:8px;border-bottom:1px solid rgba(148,163,184,.2);text-align:left;vertical-align:top}.m11-table th{position:sticky;top:0;background:var(--bg,#fff);z-index:1}
+.m11-badge{display:inline-block;padding:3px 7px;border-radius:999px;font-size:10px;font-weight:800;background:rgba(99,102,241,.12)}
+.m11-badge.red{background:rgba(220,38,38,.13);color:#dc2626}.m11-badge.amber{background:rgba(217,119,6,.13);color:#b45309}.m11-badge.green{background:rgba(22,163,74,.13);color:#15803d}
+.m11-search{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid rgba(148,163,184,.4);border-radius:10px;background:transparent;color:inherit;margin-bottom:10px}
+.m11-progress{height:8px;border-radius:99px;background:rgba(148,163,184,.2);overflow:hidden}.m11-progress span{display:block;height:100%;background:#4f46e5}
+.m11-muted{opacity:.68;font-size:12px}
+@media(max-width:800px){.m11-grid{grid-template-columns:repeat(2,minmax(0,1fr))}#mactV11Fab{right:10px;bottom:72px}}
+@media(max-width:480px){.m11-grid{grid-template-columns:1fr 1fr}.m11-card .n{font-size:20px}}
+</style>
+
+<button id="mactV11Fab" type="button" title="Advanced Case Intelligence">⚡ Advanced Center</button>
+<div id="mactV11Overlay" aria-hidden="true">
+  <div id="mactV11Panel">
+    <div id="mactV11Head">
+      <div><h2>⚡ MACT Advanced Intelligence Center</h2><div class="m11-muted">Case health • deadlines • data quality • backup • bulk tools</div></div>
+      <button id="mactV11Close" type="button" aria-label="Close">×</button>
+    </div>
+    <div id="mactV11Body">
+      <div id="mactV11Stats" class="m11-grid"></div>
+      <div class="m11-section">
+        <h3>Smart Actions</h3>
+        <div class="m11-actions">
+          <button class="m11-btn primary" id="m11ScanBtn" type="button">🔎 Run Case Health Scan</button>
+          <button class="m11-btn" id="m11DupBtn" type="button">🧬 Find Duplicates</button>
+          <button class="m11-btn" id="m11DeadlineBtn" type="button">⏰ Deadline Radar</button>
+          <button class="m11-btn" id="m11QualityBtn" type="button">🧹 Data Quality</button>
+          <button class="m11-btn" id="m11BackupBtn" type="button">⬇️ Emergency Backup</button>
+          <button class="m11-btn" id="m11RestoreBtn" type="button">⬆️ Restore Backup</button>
+          <button class="m11-btn" id="m11AuditBtn" type="button">🧾 Audit Log</button>
+        </div>
+        <input id="m11RestoreFile" type="file" accept="application/json,.json" style="display:none">
+      </div>
+      <div class="m11-section">
+        <h3>Case Intelligence</h3>
+        <input id="m11Search" class="m11-search" placeholder="Search case no., claimant, vehicle, court, insurer...">
+        <div id="m11Results"></div>
+      </div>
+      <div class="m11-section">
+        <h3>Bulk Tools</h3>
+        <div class="m11-actions">
+          <button class="m11-btn" id="m11SelectAll" type="button">☑️ Select All</button>
+          <button class="m11-btn" id="m11ExportCsv" type="button">📊 Export Selected CSV</button>
+          <button class="m11-btn" id="m11MarkUrgent" type="button">🚨 Mark Selected Urgent</button>
+          <button class="m11-btn danger" id="m11SoftDelete" type="button">🗑️ Soft Delete Selected</button>
+        </div>
+        <div id="m11BulkHint" class="m11-muted" style="margin-top:8px">Selection is local-first and can be synced by the existing cloud layer.</div>
+      </div>
+      <div class="m11-section">
+        <h3>Automatic Protection</h3>
+        <div class="m11-muted">V11 keeps rolling local snapshots, preserves deleted records as soft-delete tombstones where possible, and records important local actions for audit review.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script id="mact-v11-advanced-js">
+(function(){
+"use strict";
+const KEY="mact_unlimited_records";
+const AUDIT="mact_v11_audit";
+const SNAP="mact_v11_last_snapshot";
+const $=id=>document.getElementById(id);
+const esc=v=>String(v??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
+const load=()=>{try{const x=JSON.parse(localStorage.getItem(KEY)||"[]");return Array.isArray(x)?x:[]}catch(e){return[]}};
+const save=(r)=>{localStorage.setItem(KEY,JSON.stringify(r)); try{if(typeof window.saveLocal==="function")window.saveLocal()}catch(e){}};
+const toast=(m)=>{try{if(typeof window.toast==="function")window.toast(m);else alert(m)}catch(e){alert(m)}};
+const audit=(action,detail)=>{
+  try{let a=JSON.parse(localStorage.getItem(AUDIT)||"[]");if(!Array.isArray(a))a=[];
+    a.unshift({at:new Date().toISOString(),action,detail:String(detail||"")});a=a.slice(0,500);localStorage.setItem(AUDIT,JSON.stringify(a));
+  }catch(e){}
+};
+const isoDate=v=>{if(!v)return null; const d=new Date(String(v).length<=10?v+"T00:00:00":v); return isNaN(d)?null:d};
+const latestDate=r=>{
+  const ds=[];
+  if(r.nextDate)ds.push(r.nextDate);
+  (r.proceedings||[]).forEach(p=>{if(p.nextDate)ds.push(p.nextDate)});
+  ds.sort();
+  return ds[0]||"";
+};
+const days=v=>{const d=isoDate(v);if(!d)return null;return Math.ceil((d-new Date(new Date().toDateString()))/86400000)};
+const label=r=>r.caseTitle||r.mactNo||r.fileNumber||r.claimantName||("Record "+(r.recordId||""));
+const health=r=>{
+  let score=100, issues=[];
+  const required=[["caseTitle","Case title"],["mactNo","MACT No."],["claimantName","Claimant"],["accidentDate","Accident date"],["vehicleNo","Vehicle No."],["insuranceCo","Insurance company"],["courtName","Court name"]];
+  required.forEach(([k,n])=>{if(!String(r[k]||"").trim()){score-=10;issues.push(n+" missing")}});
+  const d=days(latestDate(r)); if(d!==null&&d<0){score-=20;issues.push("hearing overdue")}
+  if((r.photoCopyStatus||"").toLowerCase()==="pending"){score-=5;issues.push("photocopy pending")}
+  if((r.certifiedCopiesStatus||"").toLowerCase()==="pending"){score-=5;issues.push("certified copy pending")}
+  if((r.fileStatusComplete||"").toUpperCase()==="NO"){score-=5;issues.push("file incomplete")}
+  score=Math.max(0,score);
+  return {score,issues};
+};
+const renderStats=()=>{
+  const rs=load().filter(r=>!r.deleted);
+  const today=rs.filter(r=>days(latestDate(r))===0).length;
+  const overdue=rs.filter(r=>{const d=days(latestDate(r));return d!==null&&d<0}).length;
+  const urgent=rs.filter(r=>["urgent","high priority"].includes(String(r.importanceLevel||"").toLowerCase())).length;
+  const avg=rs.length?Math.round(rs.reduce((a,r)=>a+health(r).score,0)/rs.length):0;
+  $("mactV11Stats").innerHTML=[
+    ["📁",rs.length,"Active cases"],["⏰",today,"Today's hearings"],["🔴",overdue,"Overdue hearings"],["🚨",urgent,"Urgent / high priority"],
+    ["🧠",avg+"%","Average case health"],["📄",rs.filter(r=>String(r.fileStatusComplete).toUpperCase()==="NO").length,"Incomplete files"],["🛡️",rs.filter(r=>r.insuranceCo).length,"Insured cases"],["🗑️",load().filter(r=>r.deleted).length,"Soft deleted"]
+  ].map(x=>`<div class="m11-card"><div>${x[0]} <span class="n">${esc(x[1])}</span></div><div class="l">${esc(x[2])}</div></div>`).join("");
+};
+let selected=new Set();
+const renderResults=(mode="search")=>{
+  const q=String($("m11Search").value||"").trim().toLowerCase();
+  const rs=load().filter(r=>!r.deleted).filter(r=>{
+    if(!q)return true;
+    return ["caseTitle","mactNo","fileNumber","claimantName","vehicleNo","insuranceCo","courtName","district","mobile"].some(k=>String(r[k]||"").toLowerCase().includes(q));
+  }).slice(0,120);
+  let title=mode==="search"?"Search results":mode;
+  if(mode==="duplicates") title="Duplicate candidates";
+  if(mode==="deadlines") title="Deadline radar";
+  if(mode==="quality") title="Data quality alerts";
+  let rows=[];
+  if(mode==="duplicates"){
+    const map=new Map(); rs.forEach(r=>{const k=(r.mactNo||r.fileNumber||((r.claimantName||"")+"|"+(r.accidentDate||""))).toLowerCase();if(k){if(!map.has(k))map.set(k,[]);map.get(k).push(r)}});
+    [...map.values()].filter(a=>a.length>1).forEach(a=>a.forEach(r=>rows.push({r,badge:"DUPLICATE"})));
+  } else if(mode==="deadlines"){
+    rs.filter(r=>{const d=days(latestDate(r));return d!==null&&d<=30}).sort((a,b)=>(days(latestDate(a))??999)-(days(latestDate(b))??999)).forEach(r=>{
+      const d=days(latestDate(r)); rows.push({r,badge:d<0?"OVERDUE":d===0?"TODAY":d+" days"});
+    });
+  } else if(mode==="quality"){
+    rs.forEach(r=>{const h=health(r);if(h.issues.length)rows.push({r,badge:h.issues.length+" issue(s)"});});
+  } else rs.forEach(r=>rows.push({r,badge:health(r).score+"%"}));
+  if(!rows.length){$("m11Results").innerHTML=`<div class="m11-muted">No matching records found.</div>`;return}
+  $("m11Results").innerHTML=`<div style="overflow:auto"><table class="m11-table"><thead><tr><th></th><th>Case</th><th>Claimant</th><th>Next date</th><th>Status</th><th>Health / Issues</th></tr></thead><tbody>${
+    rows.map(({r,badge})=>{
+      const d=days(latestDate(r)); const cls=badge==="OVERDUE"?"red":(badge==="TODAY"||String(badge).includes("issue"))?"amber":"green";
+      const issues=health(r).issues.slice(0,3).join(", ");
+      return `<tr><td><input class="m11-check" type="checkbox" data-id="${esc(r.recordId)}" ${selected.has(String(r.recordId))?"checked":""}></td><td><b>${esc(label(r))}</b><br><span class="m11-muted">${esc(r.mactNo||r.fileNumber||"")}</span></td><td>${esc(r.claimantName||"—")}</td><td>${esc(latestDate(r)||"—")}${d!==null?`<br><span class="m11-muted">${d<0?Math.abs(d)+" days overdue":d===0?"Today":d+" days"}</span>`:""}</td><td><span class="m11-badge ${cls}">${esc(badge)}</span></td><td>${esc(issues||"No major alert")}<div class="m11-progress" style="margin-top:5px"><span style="width:${health(r).score}%"></span></div></td></tr>`;
+    }).join("")
+  }</tbody></table></div>`;
+  document.querySelectorAll(".m11-check").forEach(c=>c.addEventListener("change",()=>{if(c.checked)selected.add(String(c.dataset.id));else selected.delete(String(c.dataset.id));updateHint()}));
+};
+const updateHint=()=>{$("m11BulkHint").textContent=`${selected.size} case(s) selected. Bulk actions affect local records and are written through the existing local/cloud bridge where available.`};
+const snapshot=()=>{
+  const payload={version:"MACT-V11",createdAt:new Date().toISOString(),records:load(),audit:(()=>{try{return JSON.parse(localStorage.getItem(AUDIT)||"[]")}catch(e){return[]}})()};
+  localStorage.setItem(SNAP,JSON.stringify(payload));
+  const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="MACT_V11_Emergency_Backup_"+new Date().toISOString().slice(0,10)+".json";a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+  audit("Emergency backup",payload.records.length+" records");toast("Emergency backup exported.");
+};
+const restore=async file=>{
+  try{const txt=await file.text();const p=JSON.parse(txt);if(!p||!Array.isArray(p.records))throw Error("Invalid backup");
+    const current=load(), map=new Map(current.map(r=>[String(r.recordId),r]));
+    p.records.forEach(r=>{const id=String(r.recordId||"");if(id)map.set(id,{...map.get(id),...r})});
+    save([...map.values()]);audit("Backup restored",p.records.length+" records merged");renderStats();renderResults();toast("Backup merged successfully.");setTimeout(()=>location.reload(),700);
+  }catch(e){toast("Restore failed: invalid JSON backup.")}
+};
+const exportCsv=()=>{
+  const rs=load().filter(r=>!r.deleted&&selected.has(String(r.recordId)));
+  if(!rs.length){toast("Select at least one case.");return}
+  const cols=["recordId","caseTitle","mactNo","fileNumber","claimantName","accidentDate","vehicleNo","insuranceCo","courtName","nextDate","importanceLevel","fileStatusComplete"];
+  const q=v=>`"${String(v??"").replace(/"/g,'""')}"`;
+  const csv=[cols.join(","),...rs.map(r=>cols.map(k=>q(r[k])).join(","))].join("\n");
+  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download="MACT_Selected_Cases.csv";a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+  audit("CSV export",rs.length+" records");toast("CSV exported.");
+};
+const bulk=(kind)=>{
+  if(!selected.size){toast("Select cases first.");return}
+  const rs=load();
+  let changed=0;
+  rs.forEach(r=>{if(selected.has(String(r.recordId))){if(kind==="urgent")r.importanceLevel="Urgent";if(kind==="delete")r.deleted=true;r.updatedAt=new Date().toISOString();changed++}});
+  save(rs);audit(kind==="urgent"?"Bulk urgent mark":"Bulk soft delete",changed+" records");selected.clear();renderStats();renderResults();updateHint();toast(changed+" record(s) updated.");
+};
+const open=()=>{renderStats();renderResults();updateHint();$("mactV11Overlay").classList.add("show");$("mactV11Overlay").setAttribute("aria-hidden","false")};
+const close=()=>{$("mactV11Overlay").classList.remove("show");$("mactV11Overlay").setAttribute("aria-hidden","true")};
+function bind(){
+  if(!$("mactV11Fab"))return;
+  $("mactV11Fab").onclick=open;$("mactV11Close").onclick=close;
+  $("mactV11Overlay").addEventListener("click",e=>{if(e.target.id==="mactV11Overlay")close()});
+  $("m11Search").addEventListener("input",()=>renderResults());
+  $("m11ScanBtn").onclick=()=>{renderStats();renderResults("quality");audit("Case health scan","All active records");};
+  $("m11DupBtn").onclick=()=>{renderResults("duplicates");audit("Duplicate scan","");};
+  $("m11DeadlineBtn").onclick=()=>{renderResults("deadlines");audit("Deadline radar","Next 30 days");};
+  $("m11QualityBtn").onclick=()=>{renderResults("quality");audit("Data quality scan","");};
+  $("m11BackupBtn").onclick=snapshot;
+  $("m11RestoreBtn").onclick=()=>$("m11RestoreFile").click();
+  $("m11RestoreFile").onchange=()=>{const f=$("m11RestoreFile").files[0];if(f)restore(f)};
+  $("m11AuditBtn").onclick=()=>{
+    let a=[];try{a=JSON.parse(localStorage.getItem(AUDIT)||"[]")}catch(e){}
+    $("m11Results").innerHTML=a.length?`<div style="overflow:auto"><table class="m11-table"><thead><tr><th>Time</th><th>Action</th><th>Detail</th></tr></thead><tbody>${a.slice(0,100).map(x=>`<tr><td>${esc(new Date(x.at).toLocaleString())}</td><td><b>${esc(x.action)}</b></td><td>${esc(x.detail)}</td></tr>`).join("")}</tbody></table></div>`:`<div class="m11-muted">No audit events yet.</div>`;
+  };
+  $("m11SelectAll").onclick=()=>{load().filter(r=>!r.deleted).forEach(r=>selected.add(String(r.recordId)));renderResults();updateHint()};
+  $("m11ExportCsv").onclick=exportCsv;$("m11MarkUrgent").onclick=()=>bulk("urgent");$("m11SoftDelete").onclick=()=>{if(confirm("Soft-delete selected cases?"))bulk("delete")};
+  document.addEventListener("keydown",e=>{if(e.key==="Escape")close();if((e.ctrlKey||e.metaKey)&&e.shiftKey&&e.key.toLowerCase()==="a"){e.preventDefault();open()}});
+  // Daily automatic snapshot retained locally; it does not replace the user's normal cloud backup.
+  try{const last=localStorage.getItem(SNAP);if(!last||Date.now()-new Date(JSON.parse(last).createdAt).getTime()>86400000)localStorage.setItem(SNAP,JSON.stringify({version:"MACT-V11-AUTO",createdAt:new Date().toISOString(),records:load()}));}catch(e){}
+}
+if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",bind,{once:true});else bind();
+window.MACTV11={open,close,health};
+})();
+</script>
+
+<style id="mact-v12-css">
+#m12Fab{position:fixed;right:18px;bottom:142px;z-index:99990;border:0;border-radius:999px;padding:12px 15px;background:linear-gradient(135deg,#0f172a,#7c3aed);color:#fff;font-weight:900;box-shadow:0 14px 35px rgba(0,0,0,.28);cursor:pointer}
+#m12Ov{display:none;position:fixed;inset:0;z-index:99985;background:rgba(2,6,23,.68);backdrop-filter:blur(6px);padding:12px;align-items:center;justify-content:center}
+#m12Ov.show{display:flex}#m12Panel{width:min(1250px,100%);height:min(94vh,940px);border-radius:20px;overflow:hidden;background:var(--bg,#fff);color:var(--text,#111827);box-shadow:0 35px 100px rgba(0,0,0,.4);display:flex;flex-direction:column}
+#m12Head{padding:14px 18px;border-bottom:1px solid rgba(148,163,184,.25);display:flex;justify-content:space-between;align-items:center;gap:10px}#m12Head h2{margin:0;font-size:20px}#m12Close{border:0;background:transparent;color:inherit;font-size:26px;cursor:pointer}
+#m12Nav{display:flex;gap:6px;padding:9px 12px;border-bottom:1px solid rgba(148,163,184,.22);overflow:auto}.m12-tab{white-space:nowrap;border:1px solid rgba(148,163,184,.3);background:rgba(148,163,184,.07);color:inherit;border-radius:9px;padding:8px 11px;font-weight:800;cursor:pointer}.m12-tab.active{background:#7c3aed;color:#fff;border-color:#7c3aed}
+#m12Body{padding:14px;overflow:auto}.m12-page{display:none}.m12-page.active{display:block}.m12-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.m12-card{border:1px solid rgba(148,163,184,.28);border-radius:14px;padding:13px;background:rgba(148,163,184,.06)}.m12-num{font-size:25px;font-weight:950}.m12-label{font-size:12px;opacity:.7}
+.m12-section{border:1px solid rgba(148,163,184,.28);border-radius:14px;padding:14px;margin-top:12px}.m12-section h3{margin:0 0 10px;font-size:15px}.m12-actions{display:flex;flex-wrap:wrap;gap:8px}.m12-btn{border:1px solid rgba(148,163,184,.35);background:rgba(148,163,184,.08);color:inherit;border-radius:9px;padding:8px 11px;cursor:pointer;font-weight:800}.m12-btn.primary{background:#7c3aed;color:#fff;border-color:#7c3aed}.m12-btn.danger{background:#dc2626;color:#fff;border-color:#dc2626}
+.m12-input,.m12-select,.m12-text{box-sizing:border-box;width:100%;padding:9px 10px;border:1px solid rgba(148,163,184,.4);border-radius:9px;background:transparent;color:inherit;margin:4px 0 8px}.m12-formgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.m12-table{width:100%;border-collapse:collapse;font-size:12px}.m12-table th,.m12-table td{padding:8px;border-bottom:1px solid rgba(148,163,184,.2);text-align:left}.m12-table th{position:sticky;top:0;background:var(--bg,#fff)}.m12-timeline{border-left:3px solid #7c3aed;padding-left:14px}.m12-event{position:relative;margin:0 0 14px}.m12-event:before{content:"";position:absolute;left:-22px;top:4px;width:10px;height:10px;border-radius:50%;background:#7c3aed}.m12-muted{font-size:12px;opacity:.68}.m12-badge{display:inline-block;border-radius:999px;padding:3px 7px;font-size:10px;font-weight:900;background:rgba(124,58,237,.12)}.m12-badge.red{color:#dc2626;background:rgba(220,38,38,.12)}.m12-badge.green{color:#15803d;background:rgba(22,163,74,.12)}
+@media(max-width:850px){.m12-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.m12-formgrid{grid-template-columns:1fr}#m12Fab{right:10px;bottom:118px}}
+</style><button id="m12Fab" type="button">🚀 V12 Pro Center</button>
+<div id="m12Ov" aria-hidden="true"><div id="m12Panel">
+<div id="m12Head"><div><h2>🚀 MACT Legal Portal V12 Pro</h2><div class="m12-muted">Case intelligence • hearings • documents • drafts • print • security</div></div><button id="m12Close" type="button">×</button></div>
+<div id="m12Nav"><button class="m12-tab active" data-page="dashboard">📊 Dashboard</button><button class="m12-tab" data-page="timeline">🕒 Timeline</button><button class="m12-tab" data-page="documents">📁 Documents</button><button class="m12-tab" data-page="draft">📝 Draft Studio</button><button class="m12-tab" data-page="print">🖨️ Print Center</button><button class="m12-tab" data-page="security">🔐 Security</button></div>
+<div id="m12Body">
+<section id="m12-dashboard" class="m12-page active"><div id="m12Stats" class="m12-grid"></div><div class="m12-section"><h3>Case Command Center</h3><div class="m12-actions"><button class="m12-btn primary" id="m12Refresh" type="button">↻ Refresh Intelligence</button><button class="m12-btn" id="m12Upcoming" type="button">⏰ Upcoming Hearings</button><button class="m12-btn" id="m12Incomplete" type="button">🧹 Incomplete Cases</button><button class="m12-btn" id="m12Snapshot" type="button">💾 Quick Backup</button></div></div><div class="m12-section"><h3>Priority Queue</h3><div id="m12Priority"></div></div></section>
+<section id="m12-timeline" class="m12-page"><div class="m12-section"><h3>Case Timeline Builder</h3><input id="m12TimelineSearch" class="m12-input" placeholder="Case no. / claimant / file no."><div id="m12TimelineOut"></div></div></section>
+<section id="m12-documents" class="m12-page"><div class="m12-section"><h3>Document Intelligence</h3><div class="m12-formgrid"><div><label>Case</label><select id="m12DocCase" class="m12-select"></select></div><div><label>Document type</label><select id="m12DocType" class="m12-select"><option>Petition</option><option>Vakalatnama</option><option>FIR</option><option>Medical Record</option><option>Post Mortem</option><option>Insurance</option><option>RC / DL</option><option>Evidence</option><option>Order / Award</option><option>Other</option></select></div></div><input id="m12DocName" class="m12-input" placeholder="Document name / description"><input id="m12DocFile" type="file" class="m12-input"><button id="m12AddDoc" class="m12-btn primary" type="button">＋ Add Document</button><div id="m12DocsOut" style="margin-top:10px"></div></div></section>
+<section id="m12-draft" class="m12-page"><div class="m12-section"><h3>Draft Studio</h3><select id="m12DraftCase" class="m12-select"></select><select id="m12DraftType" class="m12-select"><option>Petition Cover</option><option>Hearing Note</option><option>Evidence Checklist</option><option>Insurance Notice</option><option>Client Update</option><option>Case Summary</option></select><div class="m12-actions"><button id="m12GenerateDraft" class="m12-btn primary" type="button">✨ Generate Draft</button><button id="m12CopyDraft" class="m12-btn" type="button">📋 Copy</button><button id="m12DownloadDraft" class="m12-btn" type="button">⬇️ TXT</button></div><textarea id="m12DraftOut" class="m12-text" rows="16" placeholder="Generated draft will appear here..."></textarea><div class="m12-muted">Drafts are templates based on stored case fields; review before legal use.</div></div></section>
+<section id="m12-print" class="m12-page"><div class="m12-section"><h3>Advanced Print Center</h3><select id="m12PrintCase" class="m12-select"></select><div class="m12-actions"><button id="m12PrintCaseBtn" class="m12-btn primary" type="button">🖨️ Print Case Sheet</button><button id="m12PrintTimelineBtn" class="m12-btn" type="button">🕒 Print Timeline</button></div><div id="m12PrintPreview" style="margin-top:10px"></div></div></section>
+<section id="m12-security" class="m12-page"><div class="m12-section"><h3>Security & Activity</h3><div id="m12SecurityStats"></div><div class="m12-actions"><button id="m12ExportAudit" class="m12-btn" type="button">🧾 Export Audit</button><button id="m12ClearAudit" class="m12-btn danger" type="button">Clear Local Audit</button></div><div id="m12AuditOut" style="margin-top:10px"></div></div></section>
+</div></div></div><script id="mact-v12-js">
+(function(){
+"use strict";
+const KEY="mact_unlimited_records",DOC="mact_v12_documents",AUD="mact_v11_audit",$=x=>document.getElementById(x);
+const esc=v=>String(v??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
+const records=()=>{try{let r=JSON.parse(localStorage.getItem(KEY)||"[]");return Array.isArray(r)?r.filter(x=>!x.deleted):[]}catch(e){return[]}};
+const docs=()=>{try{let r=JSON.parse(localStorage.getItem(DOC)||"[]");return Array.isArray(r)?r:[]}catch(e){return[]}};
+const saveDocs=r=>localStorage.setItem(DOC,JSON.stringify(r));
+const audit=(a,d)=>{try{let x=JSON.parse(localStorage.getItem(AUD)||"[]");if(!Array.isArray(x))x=[];x.unshift({at:new Date().toISOString(),action:a,detail:d||""});localStorage.setItem(AUD,JSON.stringify(x.slice(0,1000)))}catch(e){}};
+const toast=m=>{try{if(typeof window.toast==="function")window.toast(m);else alert(m)}catch(e){alert(m)}};
+const label=r=>r.caseTitle||r.mactNo||r.fileNumber||r.claimantName||"Unnamed case";
+const dateVal=r=>r.nextDate||r.hearingDate||r.nextHearingDate||"";
+const dayDiff=v=>{if(!v)return null;let d=new Date(String(v).length<=10?v+"T00:00:00":v);return isNaN(d)?null:Math.ceil((d-new Date(new Date().toDateString()))/86400000)};
+function populate(){const rs=records();["m12DocCase","m12DraftCase","m12PrintCase"].forEach(id=>{const el=$(id);if(el)el.innerHTML='<option value="">— Select case —</option>'+rs.map(r=>`<option value="${esc(r.recordId||"")}">${esc(label(r))} ${r.mactNo?"• "+esc(r.mactNo):""}</option>`).join("")});renderDocs()}
+function renderStats(){const rs=records(),today=rs.filter(r=>dayDiff(dateVal(r))===0).length,next=rs.filter(r=>{let d=dayDiff(dateVal(r));return d!==null&&d>0&&d<=7}).length,overdue=rs.filter(r=>{let d=dayDiff(dateVal(r));return d!==null&&d<0}).length,incomplete=rs.filter(r=>["claimantName","mactNo","accidentDate","courtName"].some(k=>!String(r[k]||"").trim())).length,d=docs(),pendingDocs=rs.filter(r=>!d.some(x=>String(x.caseId)===String(r.recordId))).length;let ae=0;try{ae=JSON.parse(localStorage.getItem(AUD)||"[]").length}catch(e){}const vals=[["📁",rs.length,"Active cases"],["📅",today,"Today's hearings"],["⏳",next,"Next 7 days"],["🔴",overdue,"Overdue"],["🧹",incomplete,"Incomplete"],["📄",pendingDocs,"Cases without docs"],["🗂️",d.length,"Documents"],["🧾",ae,"Audit events"]];$("m12Stats").innerHTML=vals.map(v=>`<div class="m12-card"><div class="m12-num">${v[0]} ${esc(v[1])}</div><div class="m12-label">${esc(v[2])}</div></div>`).join("")}
+function priority(){const rs=records().map(r=>({r,d:dayDiff(dateVal(r))})).filter(x=>x.d!==null&&x.d<=14).sort((a,b)=>a.d-b.d);$("m12Priority").innerHTML=rs.length?`<div style="overflow:auto"><table class="m12-table"><thead><tr><th>Case</th><th>Claimant</th><th>Date</th><th>Alert</th></tr></thead><tbody>${rs.map(x=>`<tr><td><b>${esc(label(x.r))}</b></td><td>${esc(x.r.claimantName||"—")}</td><td>${esc(dateVal(x.r))}</td><td><span class="m12-badge ${x.d<0?"red":x.d===0?"red":"green"}">${x.d<0?Math.abs(x.d)+" days overdue":x.d===0?"TODAY":x.d+" days"}</span></td></tr>`).join("")}</tbody></table></div>`:'<div class="m12-muted">No upcoming/overdue dates found in stored case fields.</div>'}
+function timeline(){const q=String($("m12TimelineSearch").value||"").toLowerCase(),rs=records().filter(r=>!q||Object.values(r).join(" ").toLowerCase().includes(q)).slice(0,30);$("m12TimelineOut").innerHTML=rs.length?rs.map(r=>{const ev=[];[["Accident",r.accidentDate],["Filing",r.filingDate],["Next hearing",dateVal(r)],["Last updated",r.updatedAt]].forEach(x=>{if(x[1])ev.push(x)});(r.proceedings||[]).forEach(p=>ev.push([p.type||"Proceeding",p.date||p.nextDate]));ev.sort((a,b)=>String(a[1]).localeCompare(String(b[1])));return `<div class="m12-section"><b>${esc(label(r))}</b><div class="m12-muted">${esc(r.claimantName||"")}</div><div class="m12-timeline" style="margin-top:10px">${ev.length?ev.map(e=>`<div class="m12-event"><b>${esc(e[0])}</b><br><span class="m12-muted">${esc(e[1])}</span></div>`).join(""):'<span class="m12-muted">No timeline dates stored.</span>'}</div></div>`}).join(""):'<div class="m12-muted">No matching cases.</div>'}
+function renderDocs(){const ds=docs(),rs=records();$("m12DocsOut").innerHTML=ds.length?`<div style="overflow:auto"><table class="m12-table"><thead><tr><th>Case</th><th>Type</th><th>Name</th><th>Added</th><th>File</th></tr></thead><tbody>${ds.map(d=>{let r=rs.find(x=>String(x.recordId)===String(d.caseId));return `<tr><td>${esc(r?label(r):"Unknown")}</td><td>${esc(d.type)}</td><td>${esc(d.name)}</td><td>${esc(new Date(d.at).toLocaleString())}</td><td>${d.fileName?esc(d.fileName):"Metadata only"}</td></tr>`}).join("")}</tbody></table></div>`:'<div class="m12-muted">No documents registered yet.</div>'}
+function addDoc(){const id=$("m12DocCase").value;if(!id){toast("Select a case.");return}const f=$("m12DocFile").files[0],d=docs();d.unshift({id:crypto.randomUUID?crypto.randomUUID():Date.now()+"",caseId:id,type:$("m12DocType").value,name:$("m12DocName").value||(f&&f.name)||"Untitled document",fileName:f?f.name:"",size:f?f.size:0,at:new Date().toISOString()});saveDocs(d);audit("Document registered",$("m12DocName").value||"Untitled");$("m12DocName").value="";$("m12DocFile").value="";renderDocs();renderStats();toast("Document registered. File content is not uploaded by this V12 module.");}
+function caseFor(id){return records().find(r=>String(r.recordId)===String(id))}
+function draft(){const r=caseFor($("m12DraftCase").value);if(!r){toast("Select a case.");return}const t=$("m12DraftType").value,p=String(r.claimantName||"Claimant"),no=String(r.mactNo||r.fileNumber||"—"),court=String(r.courtName||"—");let text="";if(t==="Case Summary")text=`CASE SUMMARY\n\nCase: ${label(r)}\nMACT/File No.: ${no}\nClaimant: ${p}\nCourt: ${court}\nAccident Date: ${r.accidentDate||"—"}\nVehicle: ${r.vehicleNo||r.vehicleType||"—"}\nInsurance: ${r.insuranceCo||"—"}\nNext Hearing: ${dateVal(r)||"—"}\n\nNotes:\n${r.notes||"—"}`;else if(t==="Hearing Note")text=`HEARING NOTE\n\nCase: ${label(r)}\nMACT/File No.: ${no}\nCourt: ${court}\nClaimant: ${p}\nDate: ${dateVal(r)||"—"}\n\nProceedings / instructions:\n• Record today's order and next date.\n• Update documents and compliance status.\n• Verify pending directions before next hearing.`;else if(t==="Evidence Checklist")text=`EVIDENCE CHECKLIST\n\nCase: ${label(r)}\nClaimant: ${p}\n\n☐ FIR / police papers\n☐ Medical / post-mortem papers\n☐ Treatment records / bills\n☐ Disability evidence, if applicable\n☐ Income / occupation evidence\n☐ Vehicle RC / DL / insurance papers\n☐ Witness / affidavit documents\n☐ Previous orders / proceedings\n\nReview and customize before use.`;else if(t==="Insurance Notice")text=`INSURANCE NOTICE – DRAFT\n\nCase: ${label(r)}\nMACT/File No.: ${no}\nClaimant: ${p}\nInsurance Company: ${r.insuranceCo||"—"}\n\nSubject: Notice regarding MACT proceedings\n\nPlease take note of the above matter and maintain the relevant policy/claim records for the proceedings.\n\n[Add advocate details, date, address and legally required particulars before issue.]`;else if(t==="Client Update")text=`CLIENT CASE UPDATE\n\nCase: ${label(r)}\nClaimant: ${p}\nNext Hearing: ${dateVal(r)||"—"}\nCurrent Status: ${r.status||"—"}\n\nPlease keep all relevant documents ready and attend/coordinate as advised.\n\n[Review and customize before sending.]`;else text=`PETITION COVER – DRAFT\n\nBEFORE THE ${court}\n\nMACT/File No.: ${no}\nClaimant: ${p}\nAccident Date: ${r.accidentDate||"—"}\nVehicle: ${r.vehicleNo||r.vehicleType||"—"}\n\nDOCUMENT: PETITION / CLAIM MATERIAL\n\n[Insert jurisdiction-specific pleadings, parties, facts, grounds, reliefs and verification after reviewing the case file.]`;$("m12DraftOut").value=text;audit("Draft generated",t+" / "+label(r))}
+function printCase(timelineOnly){const r=caseFor($("m12PrintCase").value);if(!r){toast("Select a case.");return}let body=timelineOnly?`<h1>Case Timeline</h1><h2>${esc(label(r))}</h2><pre>${esc(JSON.stringify({accidentDate:r.accidentDate,filingDate:r.filingDate,nextDate:dateVal(r),proceedings:r.proceedings||[]},null,2))}</pre>`:`<h1>MACT Case Sheet</h1><h2>${esc(label(r))}</h2><table>${Object.entries(r).filter(([k,v])=>k!=="data"&&typeof v!=="object").map(([k,v])=>`<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join("")}</table>`;const w=window.open("","_blank");if(!w){toast("Popup blocked. Allow popups for printing.");return}w.document.write(`<html><head><title>MACT Print</title><style>body{font-family:Arial;padding:30px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #bbb;padding:7px;text-align:left}th{width:30%;background:#eee}pre{white-space:pre-wrap}</style></head><body>${body}</body></html>`);w.document.close();w.focus();setTimeout(()=>w.print(),300);audit("Print",timelineOnly?"Timeline":"Case sheet")}
+function security(){let a=[];try{a=JSON.parse(localStorage.getItem(AUD)||"[]")}catch(e){}$("m12SecurityStats").innerHTML=`<div class="m12-grid"><div class="m12-card"><div class="m12-num">${a.length}</div><div class="m12-label">Audit events</div></div><div class="m12-card"><div class="m12-num">${records().length}</div><div class="m12-label">Active cases</div></div><div class="m12-card"><div class="m12-num">${docs().length}</div><div class="m12-label">Registered docs</div></div><div class="m12-card"><div class="m12-num">${navigator.onLine?"ONLINE":"OFFLINE"}</div><div class="m12-label">Network</div></div></div>`;$("m12AuditOut").innerHTML=a.length?`<div style="overflow:auto"><table class="m12-table"><tr><th>Time</th><th>Action</th><th>Detail</th></tr>${a.slice(0,80).map(x=>`<tr><td>${esc(new Date(x.at).toLocaleString())}</td><td>${esc(x.action)}</td><td>${esc(x.detail)}</td></tr>`).join("")}</table></div>`:'<div class="m12-muted">No audit events.</div>'}
+function backup(){const payload={version:"MACT-V12",createdAt:new Date().toISOString(),records:records(),documents:docs()};const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([JSON.stringify(payload,null,2)],{type:"application/json"}));a.download="MACT_V12_Backup_"+new Date().toISOString().slice(0,10)+".json";a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);audit("V12 backup",records().length+" records");toast("V12 backup exported.")}
+function bind(){$("m12Fab").onclick=()=>{$("m12Ov").classList.add("show");populate();renderStats();priority();security()};$("m12Close").onclick=()=>$("m12Ov").classList.remove("show");$("m12Ov").addEventListener("click",e=>{if(e.target.id==="m12Ov")$("m12Ov").classList.remove("show")});document.querySelectorAll(".m12-tab").forEach(b=>b.onclick=()=>{document.querySelectorAll(".m12-tab").forEach(x=>x.classList.remove("active"));document.querySelectorAll(".m12-page").forEach(x=>x.classList.remove("active"));b.classList.add("active");$("m12-"+b.dataset.page).classList.add("active");if(b.dataset.page==="timeline")timeline();if(b.dataset.page==="security")security()});$("m12Refresh").onclick=()=>{renderStats();priority();populate();toast("Intelligence refreshed.")};$("m12Upcoming").onclick=()=>{document.querySelector('[data-page="timeline"]').click();$("m12TimelineSearch").value="";timeline()};$("m12Incomplete").onclick=()=>{const rs=records().filter(r=>["claimantName","mactNo","accidentDate","courtName"].some(k=>!String(r[k]||"").trim()));$("m12Priority").innerHTML=rs.length?rs.map(r=>`<div class="m12-section"><b>${esc(label(r))}</b><br><span class="m12-muted">Missing: ${esc(["claimantName","mactNo","accidentDate","courtName"].filter(k=>!String(r[k]||"").trim()).join(", "))}</span></div>`).join(""):'<div class="m12-muted">No incomplete cases detected.</div>'};$("m12Snapshot").onclick=backup;$("m12TimelineSearch").oninput=timeline;$("m12AddDoc").onclick=addDoc;$("m12GenerateDraft").onclick=draft;$("m12CopyDraft").onclick=async()=>{try{await navigator.clipboard.writeText($("m12DraftOut").value);toast("Draft copied.")}catch(e){$("m12DraftOut").select();document.execCommand("copy");toast("Draft copied.")}};$("m12DownloadDraft").onclick=()=>{const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([$("m12DraftOut").value],{type:"text/plain"}));a.download="MACT_Draft.txt";a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)};$("m12PrintCaseBtn").onclick=()=>printCase(false);$("m12PrintTimelineBtn").onclick=()=>printCase(true);$("m12ExportAudit").onclick=()=>{const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([localStorage.getItem(AUD)||"[]"],{type:"application/json"}));a.download="MACT_Audit_Log.json";a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)};$("m12ClearAudit").onclick=()=>{if(confirm("Clear local audit log?")){localStorage.removeItem(AUD);security();toast("Audit log cleared.")}};document.addEventListener("keydown",e=>{if(e.key==="Escape")$("m12Ov").classList.remove("show");if((e.ctrlKey||e.metaKey)&&e.shiftKey&&e.key.toLowerCase()==="p"){e.preventDefault();$("m12Fab").click()}})}
+if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",bind,{once:true});else bind();window.MACTV12={open:()=>$("m12Fab").click(),backup};
+})();
+</script></body>
+</html>
