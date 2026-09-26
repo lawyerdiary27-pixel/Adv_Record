@@ -397,7 +397,7 @@ body.mact-dark .v7-command-kbd{border-color:#33425d}
  <div style="display:flex;gap:8px;flex-wrap:wrap">
   <button type="button" class="btn btn-success" id="openNewFileModalBtn">➕ Add New File</button>
   <button type="button" class="btn btn-warning" id="topAddDateBtn">📅 Add Hearing Date</button>
-  <button type="button" class="btn btn-light" id="googleLoginBtn">☁️ Cloud Sync</button>
+  <button type="button" class="btn btn-light" id="googleLoginBtn">☁️ Auto Cloud Sync</button>
   <button type="button" class="btn btn-light" id="restoreCloudBtn">🔄 Restore Cloud</button>
    <button type="button" class="btn btn-light" id="recycleBinBtn">🗑️ Recycle Bin</button>
  </div>
@@ -812,7 +812,7 @@ body.mact-dark .v7-command-kbd{border-color:#33425d}
 <script>
 "use strict";
 
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyvyBia4ObfyNe8j8Vy1UUB0NOhBw3CpARHm2lgjqgJ2SQGnf_xTU2ixNeQyc_MhBCTYg/exec";
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyvyBia4ObfyNe8j8Vy1UUB0NOhBw3CpARHm2lgjqgJ2SQGnf_xTU2ixNeQyc_MhBCTYg/exec"; // Built-in deployment URL — no manual entry.
 const V14_SYNC_FOLDER = "MACT Legal Portal V14";
 const V14_SYNC_FILE = "MACT_Legal_Portal_Data_V14.json";
 
@@ -3057,7 +3057,7 @@ window.addEventListener("unhandledrejection",function(e){
       return;
     }
 
-    const fn = typeof window.syncCloud === "function" ? window.syncCloud : null;
+    const fn = typeof window.MACTV14?.sync === "function" ? window.MACTV14.sync : (typeof window.syncCloud === "function" ? window.syncCloud : null);
     if(!fn){
       setPending(true);
       return;
@@ -3095,16 +3095,18 @@ window.addEventListener("unhandledrejection",function(e){
       return;
     }
 
-    // No local pending changes: only pull/check remote data.
-    // This prevents a 30-second timer from unnecessarily uploading the whole DB.
+    // No local pending changes: run the same record-level merge engine.
+    // This safely detects/pulls remote changes without blindly overwriting local data.
     if(!online() || !hasUrl()) return;
 
-    const pull = typeof window.pullCloud === "function" ? window.pullCloud : null;
-    if(!pull) return;
+    const mergeSync = typeof window.MACTV14?.sync === "function"
+      ? window.MACTV14.sync
+      : (typeof window.pullCloud === "function" ? window.pullCloud : null);
+    if(!mergeSync) return;
 
     try{
       updateStatus("syncing");
-      const ok = await pull();
+      const ok = await mergeSync();
       if(ok !== false){
         try { localStorage.setItem(LAST_REMOTE_KEY, new Date().toISOString()); } catch(e){}
         updateStatus("ready");
@@ -3112,7 +3114,7 @@ window.addEventListener("unhandledrejection",function(e){
         updateStatus("pending");
       }
     }catch(err){
-      console.warn("V14.1 periodic cloud check:", err);
+      console.warn("V14.1 periodic auto-sync:", err);
       if(pending()) updateStatus("pending");
       else updateStatus("failed");
     }
@@ -4167,6 +4169,7 @@ if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",
 <style id="mact-v14-css">
 #m14Fab{position:fixed;right:18px;bottom:86px;z-index:9997;border:0;border-radius:999px;padding:12px 16px;background:linear-gradient(135deg,#188038,#0b8043);color:#fff;font-weight:800;box-shadow:0 10px 30px rgba(24,128,56,.30);cursor:pointer}
 #m14Fab:hover{transform:translateY(-1px)}
+#m14Fab{display:none!important}
 #m14Ov{position:fixed;inset:0;z-index:9998;background:rgba(4,10,20,.72);backdrop-filter:blur(8px);display:none;align-items:center;justify-content:center;padding:18px}
 #m14Ov.show{display:flex}
 #m14Box{width:min(920px,100%);max-height:94vh;overflow:auto;background:#fff;color:#182230;border-radius:18px;box-shadow:0 24px 80px rgba(0,0,0,.38);padding:20px}
@@ -4200,11 +4203,11 @@ if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",
    <section class="m14-card m14-full">
     <h3>🔗 Apps Script Web App — Auto Configured</h3>
     <div class="m14-row"><input id="m14ScriptUrl" type="url" autocomplete="off" readonly></div>
-    <p><b>Automatic connection enabled.</b> The Apps Script /exec URL is built into this HTML. No manual URL entry and no Sync Key are required.</p>
+    <p><b>Automatic connection enabled.</b> The Apps Script /exec URL and Drive destination are built into this HTML. No manual URL, Sync Key, or connection step is required.</p>
    </section>
    <section class="m14-card">
     <h3>📁 Drive destination</h3>
-    <div class="m14-row"><input id="m14FolderName" type="text" value="MACT Legal Portal V14" maxlength="120"></div>
+    <div class="m14-row"><input id="m14FolderName" type="text" value="MACT Legal Portal V14" readonly></div>
     <p id="m14FileInfo">Drive backup: not verified</p>
    </section>
    <section class="m14-card">
@@ -4248,7 +4251,7 @@ if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",
  function toast14(m){if(typeof window.toast==="function")window.toast(m);else log(m)}
  function setStatus(kind,text){const d=$("m14Dot"),s=$("m14Status");if(d)d.className="m14-dot "+(kind||"");if(s)s.textContent=text}
  function getUrl(){return FIXED_SCRIPT_URL}
- function saveSettings(){const fn=$("m14FolderName")?.value.trim()||"MACT Legal Portal V14";localStorage.setItem(FOLDER_KEY,fn)}
+ function saveSettings(){localStorage.setItem(FOLDER_KEY,"MACT Legal Portal V14");}
  function localRecords(){try{return Array.isArray(window.MACT?.records)?window.MACT.records:JSON.parse(localStorage.getItem("mact_unlimited_records")||"[]")}catch(e){return[]}}
  function normalize(r){const x=Object.assign({},r||{});x.recordId=x.recordId||x.timestamp||("mact-v14-"+Date.now()+"-"+Math.random().toString(36).slice(2));x.createdAt=x.createdAt||x.updatedAt||now();x.updatedAt=x.updatedAt||x.createdAt;x.deleted=!!x.deleted;if(x.deleted&&!x.deletedAt)x.deletedAt=x.updatedAt;if(Array.isArray(x.documents))x.documents=x.documents.map(d=>{const y=Object.assign({},d);delete y.data;return y});delete x.judgmentPdfData;return x}
  function records(){return localRecords().map(normalize)}
@@ -4257,8 +4260,8 @@ if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",
  function payloadText(){return JSON.stringify(buildPayload())}
  async function sha(s){const b=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(s));return Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,"0")).join("")}
  function sizeKB(s){return (new TextEncoder().encode(s).byteLength/1024).toFixed(1)}
- function jsonp(action,extra={}){return new Promise((resolve,reject)=>{const url=getUrl();if(!url)return reject(new Error("Apps Script URL not configured"));const cb="mactV14Cb_"+Date.now()+"_"+Math.random().toString(36).slice(2);const script=document.createElement("script");const params=new URLSearchParams(Object.assign({action,callback:cb,folder:$("m14FolderName")?.value.trim()||"MACT Legal Portal V14",_:Date.now()},extra));let timer=setTimeout(()=>{cleanup();reject(new Error("Apps Script GET timed out"))},45000);function cleanup(){clearTimeout(timer);delete window[cb];script.remove()}window[cb]=data=>{cleanup();if(data&&data.ok===false){reject(new Error(data.error||"Apps Script returned an error"));return}resolve(data)};script.onerror=()=>{cleanup();reject(new Error("Apps Script endpoint could not be reached"))};script.src=url+"?"+params.toString();document.head.appendChild(script)})}
- async function postBackup(){const url=getUrl();if(!url)throw new Error("Apps Script URL not configured");const body=JSON.stringify({action:"backup",folder:$("m14FolderName")?.value.trim()||"MACT Legal Portal V14",fileName:BACKUP_NAME,payload:buildPayload()});await fetch(url,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain;charset=utf-8"},body});return true}
+ function jsonp(action,extra={}){return new Promise((resolve,reject)=>{const url=getUrl();if(!url)return reject(new Error("Apps Script URL not configured"));const cb="mactV14Cb_"+Date.now()+"_"+Math.random().toString(36).slice(2);const script=document.createElement("script");const params=new URLSearchParams(Object.assign({action,callback:cb,folder:"MACT Legal Portal V14",_:Date.now()},extra));let timer=setTimeout(()=>{cleanup();reject(new Error("Apps Script GET timed out"))},45000);function cleanup(){clearTimeout(timer);delete window[cb];script.remove()}window[cb]=data=>{cleanup();if(data&&data.ok===false){reject(new Error(data.error||"Apps Script returned an error"));return}resolve(data)};script.onerror=()=>{cleanup();reject(new Error("Apps Script endpoint could not be reached"))};script.src=url+"?"+params.toString();document.head.appendChild(script)})}
+ async function postBackup(){const url=getUrl();if(!url)throw new Error("Apps Script URL not configured");const body=JSON.stringify({action:"backup",folder:"MACT Legal Portal V14",fileName:BACKUP_NAME,payload:buildPayload()});await fetch(url,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain;charset=utf-8"},body});return true}
  function merge(local,cloud){const m=new Map(local.map(normalize).map(r=>[String(r.recordId),r]));(cloud||[]).map(normalize).forEach(r=>{const old=m.get(String(r.recordId));if(!old||((Date.parse(r.updatedAt)||0)>=(Date.parse(old.updatedAt)||0)))m.set(String(r.recordId),r)});return [...m.values()]}
  async function applyCloud(data){if(!data||!data.payload||!Array.isArray(data.payload.records))throw new Error("Invalid Drive backup returned by Apps Script");const p=data.payload;localStorage.setItem("mact_unlimited_records",JSON.stringify(p.records));Object.entries(p.appState||{}).forEach(([k,v])=>{try{localStorage.setItem(k,v)}catch(e){}});if(typeof window.loadLocal==="function")try{window.loadLocal()}catch(e){}if(typeof window.renderAll==="function")try{window.renderAll()}catch(e){}}
  async function sync(mode="merge"){
@@ -4279,15 +4282,15 @@ if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",
  function markLast(){const t=now();localStorage.setItem(LAST_KEY,t);if($("m14Last"))$("m14Last").textContent="Last Drive sync: "+new Date(t).toLocaleString()}
  async function connect(){saveSettings();if(!getUrl()){toast14("पहले Apps Script /exec URL डालें.");return false}try{setStatus("warn","Testing Apps Script…");const r=await jsonp("health");if(!r||r.ok!==true)throw new Error(r?.error||"Health check failed");setStatus("ok","Connected • Apps Script + Drive");if($("syncStatus"))$("syncStatus").textContent="☁ Cloud Sync Active";if(typeof cloudConnected!=="undefined"){cloudConnected=true;localStorage.setItem("mact_cloud_connected","1");}$("m14Account").textContent="Backend: Google Apps Script • DriveApp";log("Apps Script connection verified. Drive backend is reachable.");toast14("Google Apps Script connected successfully.");updateUI();return true}catch(e){setStatus("err","Apps Script connection failed");log("Connection error: "+e.message);toast14("Apps Script connection failed: "+e.message);return false}}
  function disconnect(){setStatus("","Not connected");$("m14Account").textContent="Backend: —";log("Local Apps Script session cleared. Drive backup was not deleted.");toast14("Disconnected. Drive backup remains safe.")}
- function updateUI(){if($("m14CaseCount"))$("m14CaseCount").textContent=String(records().filter(r=>!r.deleted&&!r.deletedAt).length);if($("m14Size"))$("m14Size").textContent=sizeKB(payloadText())+" KB";const u=getUrl();if($("m14ScriptUrl"))$("m14ScriptUrl").value=u;if($("m14FolderName"))$("m14FolderName").value=localStorage.getItem(FOLDER_KEY)||"MACT Legal Portal V14";if($("m14Auto"))$("m14Auto").checked=true;const last=localStorage.getItem(LAST_KEY);if(last&&$("m14Last"))$("m14Last").textContent="Last Drive sync: "+new Date(last).toLocaleString();if(u&&$("m14FileInfo"))$("m14FileInfo").textContent="Drive master file: "+BACKUP_NAME+" • Apps Script managed"}
- function startAuto(){clearInterval(autoTimer);autoTimer=setInterval(async()=>{if(navigator.onLine&&!syncing&&getUrl()){try{const h=await sha(payloadText());if(h!==(localStorage.getItem(SIG_KEY)||""))await sync("merge")}catch(e){log("Auto-sync check: "+e.message)}}},30000)}
+ function updateUI(){if($("m14CaseCount"))$("m14CaseCount").textContent=String(records().filter(r=>!r.deleted&&!r.deletedAt).length);if($("m14Size"))$("m14Size").textContent=sizeKB(payloadText())+" KB";const u=getUrl();if($("m14ScriptUrl"))$("m14ScriptUrl").value=u;if($("m14FolderName"))$("m14FolderName").value="MACT Legal Portal V14";if($("m14Auto"))$("m14Auto").checked=true;const last=localStorage.getItem(LAST_KEY);if(last&&$("m14Last"))$("m14Last").textContent="Last Drive sync: "+new Date(last).toLocaleString();if(u&&$("m14FileInfo"))$("m14FileInfo").textContent="Drive master file: "+BACKUP_NAME+" • Apps Script managed"}
+ function startAuto(){clearInterval(autoTimer); /* V14.1 True Auto-Sync owns scheduling, retry and remote checks. */ }
  function open(){const o=$("m14Ov");o.classList.add("show");o.setAttribute("aria-hidden","false");updateUI()}
  function close(){const o=$("m14Ov");o.classList.remove("show");o.setAttribute("aria-hidden","true")}
  function bind(){
   if($("googleLoginBtn"))$("googleLoginBtn").onclick=()=>open();
   if($("restoreCloudBtn"))$("restoreCloudBtn").onclick=()=>{if(confirm("Google Drive se V14 data restore/merge karna hai?"))sync("download")};
-  $("m14Fab").onclick=open;$("m14Close").onclick=close;$("m14Ov").addEventListener("click",e=>{if(e.target.id==="m14Ov")close()});$("m14Connect").onclick=connect;$("m14Sync").onclick=()=>sync("merge");$("m14Restore").onclick=()=>{if(confirm("Drive backup ko local data ke saath merge/restore karna hai? Existing records newer timestamps ke basis par preserve honge."))sync("download")};$("m14Disconnect").onclick=disconnect;$("m14Auto").onchange=()=>{if($("m14Auto"))$("m14Auto").checked=true;startAuto()};
-  document.addEventListener("keydown",e=>{if(e.key==="Escape")close();if((e.ctrlKey||e.metaKey)&&e.shiftKey&&e.key.toLowerCase()==="d"){e.preventDefault();open()}});window.addEventListener("online",()=>{if(getUrl())setStatus("ok","Online • Apps Script ready");if($("syncStatus")&&localStorage.getItem("mact_cloud_connected")==="1")$("syncStatus").textContent="☁ Cloud Sync Active";setTimeout(()=>{if(!syncing)sync("merge")},300)});window.addEventListener("offline",()=>setStatus("warn","Offline • local mode active"));updateUI();startAuto();setTimeout(async()=>{if(navigator.onLine&&getUrl()&&!syncing){try{await connect();await sync("merge")}catch(e){log("Automatic startup sync: "+e.message)}}},1200);
+  $("m14Fab").onclick=open;$("m14Close").onclick=close;$("m14Ov").addEventListener("click",e=>{if(e.target.id==="m14Ov")close()});if($("m14Connect"))$("m14Connect").onclick=connect;if($("m14Sync"))$("m14Sync").onclick=()=>sync("merge");if($("m14Restore"))$("m14Restore").onclick=()=>sync("download");if($("m14Disconnect"))$("m14Disconnect").onclick=disconnect;if($("m14Auto"))$("m14Auto").onchange=()=>{ $("m14Auto").checked=true; startAuto(); };
+  document.addEventListener("keydown",e=>{if(e.key==="Escape")close();if((e.ctrlKey||e.metaKey)&&e.shiftKey&&e.key.toLowerCase()==="d"){e.preventDefault();open()}});window.addEventListener("online",()=>{if(getUrl())setStatus("ok","Online • Apps Script ready");if($("syncStatus")&&localStorage.getItem("mact_cloud_connected")==="1")$("syncStatus").textContent="☁ Cloud Sync Active";setTimeout(()=>{if(!syncing)sync("merge")},300)});window.addEventListener("offline",()=>setStatus("warn","Offline • local mode active"));updateUI();startAuto();setTimeout(()=>{ if(window.MACTV141?.checkNow) window.MACTV141.checkNow(); },1200);
  }
  window.MACTV14={open,sync:()=>sync("merge"),connect,disconnect,update:updateUI,getConfig:()=>({scriptUrl:getUrl(),folder:localStorage.getItem(FOLDER_KEY)||"MACT Legal Portal V14"})};
  if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",bind,{once:true});else bind();
