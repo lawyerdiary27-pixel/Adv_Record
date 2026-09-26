@@ -812,8 +812,7 @@ body.mact-dark .v7-command-kbd{border-color:#33425d}
 <script>
 "use strict";
 
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzvHDL6RBVGU4och-DZBj7cGeHOI3YoCvg3w3QKhiyRUx6lzPdVd3gfUC_qypwtB5Wt/exec";
-const V14_SYNC_SECRET = "MACT-V14-Drive-7fK9Q2xL-2026-Sync-4N8pZ6rT5Wc3";
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyvyBia4ObfyNe8j8Vy1UUB0NOhBw3CpARHm2lgjqgJ2SQGnf_xTU2ixNeQyc_MhBCTYg/exec";
 const V14_SYNC_FOLDER = "MACT Legal Portal V14";
 const V14_SYNC_FILE = "MACT_Legal_Portal_Data_V14.json";
 
@@ -2210,15 +2209,15 @@ if($("printFilteredRecordsBtn")){
 }
 
 function getCloudUrl(){
- return String(localStorage.getItem("mact_cloud_url") || APPS_SCRIPT_URL || "").trim().replace(/\/+$/,"");
+ return String(APPS_SCRIPT_URL || "").trim().replace(/\/+$/,"");
 }
 function cloudJsonp(action, extra={}){
  return new Promise((resolve,reject)=>{
   const url=getCloudUrl(); if(!url){reject(new Error("Cloud URL not configured"));return;}
   const cb="mactCloudCb_"+Date.now()+"_"+Math.random().toString(36).slice(2,8);
   const script=document.createElement("script");
-  const params=new URLSearchParams(Object.assign({action,callback:cb,secret:V14_SYNC_SECRET,folder:V14_SYNC_FOLDER,fileName:V14_SYNC_FILE,_:Date.now()},extra));
-  let timer=setTimeout(()=>{cleanup();reject(new Error("Cloud request timed out"));},15000);
+  const params=new URLSearchParams(Object.assign({action,callback:cb,folder:V14_SYNC_FOLDER,fileName:V14_SYNC_FILE,_:Date.now()},extra));
+  let timer=setTimeout(()=>{cleanup();reject(new Error("Cloud request timed out"));},45000);
   function cleanup(){clearTimeout(timer);delete window[cb];script.remove();}
   window[cb]=(data)=>{cleanup();resolve(data);};
   script.onerror=()=>{cleanup();reject(new Error("Cloud endpoint could not be reached"));};
@@ -2247,7 +2246,7 @@ async function syncCloud(){
  try{
   records=records.map(normalizeCloudRecord);
   saveLocal();
-  const payload={action:"backup",secret:V14_SYNC_SECRET,folder:V14_SYNC_FOLDER,fileName:V14_SYNC_FILE,records,updatedAt:nowISO(),source:"MACT Legal Portal",appVersion:"V14.1-Fixed-Key"};
+  const payload={action:"backup",folder:V14_SYNC_FOLDER,fileName:V14_SYNC_FILE,records,updatedAt:nowISO(),source:"MACT Legal Portal",appVersion:"V14.1-Drive-Master"};
   await fetch(getCloudUrl(),{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify(payload)});
   await new Promise(r=>setTimeout(r,900));
   const check=await cloudJsonp("get");
@@ -2269,26 +2268,43 @@ async function syncCloud(){
  }finally{syncBusy=false;}
 }
 async function pullCloud(){
- if(!navigator.onLine){toast("You are offline. Local records are available.");return false;}
- if($("syncStatus"))$("syncStatus").textContent="☁ Connecting…";
+ if(!navigator.onLine){
+  if($("syncStatus"))$("syncStatus").textContent="☁ Offline • Saved locally";
+  toast("You are offline. Local records are available.");
+  return false;
+ }
+ if($("syncStatus"))$("syncStatus").textContent="☁ Checking cloud…";
  try{
   const result=await cloudJsonp("get");
   const cloudRecords=Array.isArray(result)?result:(Array.isArray(result.records)?result.records:[]);
-  const map=new Map(records.map(r=>[String(r.recordId||r.timestamp),r]));
-  cloudRecords.forEach(raw=>{
-   if(!raw||typeof raw!=="object")return;
-   const cr=normalizeCloudRecord(raw),key=String(cr.recordId),local=map.get(key);
-   if(!local||new Date(cr.updatedAt||cr.createdAt||0).getTime()>=new Date(local.updatedAt||local.createdAt||0).getTime())map.set(key,cr);
-  });
-  records=[...map.values()];saveLocal();renderAll();
-  cloudConnected=true;localStorage.setItem("mact_cloud_connected","1");
+  // Google Drive is the master database; browser storage is only a cache/offline queue.
+   records=cloudRecords.map(normalizeCloudRecord);
+   if(result && result.payload && result.payload.appState && typeof result.payload.appState==="object"){
+    Object.entries(result.payload.appState).forEach(([k,v])=>{try{localStorage.setItem(k,v)}catch(e){}});
+   }
+   saveLocal();renderAll();
+   cloudConnected=true;localStorage.setItem("mact_cloud_connected","1");
   if($("syncStatus"))$("syncStatus").textContent="☁ Cloud Sync Active";
   toast(`Cloud connected • ${cloudRecords.length} record(s) received.`);
   return true;
  }catch(err){
-  cloudConnected=false;localStorage.removeItem("mact_cloud_connected");
+  console.warn("Cloud read unavailable:",err);
+  // A failed large-data GET must not mark the whole backend offline.
+  // The small health request is the authoritative connectivity check.
+  try{
+   const health=await cloudJsonp("health");
+   if(health&&health.ok===true){
+    cloudConnected=true;
+    localStorage.setItem("mact_cloud_connected","1");
+    if($("syncStatus"))$("syncStatus").textContent="☁ Cloud Online • Read retrying";
+    return false;
+   }
+  }catch(healthErr){
+   console.warn("Cloud health check failed:",healthErr);
+  }
+  cloudConnected=false;
+  localStorage.removeItem("mact_cloud_connected");
   if($("syncStatus"))$("syncStatus").textContent="☁ Cloud unavailable • Local Safe";
-  console.warn("Cloud pull unavailable:",err);
   return false;
  }
 }
@@ -2317,18 +2333,12 @@ async function restoreFromCloud(){
 }
 if($("restoreCloudBtn"))$("restoreCloudBtn").onclick=restoreFromCloud;
 async function connectCloud(){
- if(!navigator.onLine){toast("You are offline. Local mode is available.");return;}
- toast("Checking cloud connection…");
+ if(!navigator.onLine){toast("You are offline. Drive sync will resume automatically.");return;}
+ toast("Checking Google Drive connection…");
  const ok=await pullCloud();
- if(ok){if(records.length)await syncCloud();return;}
- const current=getCloudUrl();
- const entered=prompt("Cloud endpoint not reachable. Paste your deployed Google Apps Script Web App URL:",current);
- if(!entered||!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec/.test(entered.trim())){
-  toast("Cloud URL not changed. Local data remains safe.");return;
- }
- localStorage.setItem("mact_cloud_url",entered.trim().replace(/\/+$/,""));
- if(await pullCloud()){if(records.length)await syncCloud();}
- else toast("Cloud endpoint test failed. Deploy Apps Script as a Web App and try again.");
+ if(ok){toast("Google Drive is online. Drive is the master database.");return;}
+ if(cloudConnected){toast("Apps Script is online. Drive read will retry automatically.");return;}
+ toast("Google Drive endpoint is unavailable. The fixed Apps Script URL will be retried automatically.");
 }
 if($("googleLoginBtn"))$("googleLoginBtn").onclick=connectCloud;
 
@@ -2361,21 +2371,61 @@ function renderAll(){
  if($("lastSyncStatus")) $("lastSyncStatus").textContent = "Last Sync: " + (last || "Never");
 }
 
-function initializeApp(){
+async function initializeApp(){
  loadLocal();
  renderForm();
  renderProceedings([]);
  renderAll();
- if(localStorage.getItem("mact_cloud_connected") === "1"){
-  cloudConnected = true;
-  updateConnectionUI();
-  setTimeout(()=>{ if(navigator.onLine) pullCloud(); }, 1000);
-  cloudTimer = setInterval(()=>{
-   if(cloudConnected && navigator.onLine){ syncCloud(); }
-  }, 60000);
- }else{
-  updateConnectionUI();
+ updateConnectionUI();
+
+ const cachedRecords = records.slice();
+ if(navigator.onLine){
+  setTimeout(async()=>{
+   try{
+    setStatus("warn","Connecting to Google Drive…");
+    const remote = await cloudJsonp("get");
+    const remoteRecords = remote && remote.payload && Array.isArray(remote.payload.records)
+      ? remote.payload.records.map(normalizeCloudRecord) : [];
+
+    if(remoteRecords.length){
+     records = remoteRecords;
+     if(remote.payload.appState && typeof remote.payload.appState==="object"){
+      Object.entries(remote.payload.appState).forEach(([k,v])=>{try{localStorage.setItem(k,v)}catch(e){}});
+     }
+     saveLocal();
+     renderAll();
+     cloudConnected=true;
+     localStorage.setItem("mact_cloud_connected","1");
+     const t=new Date().toLocaleString();
+     localStorage.setItem("mact_last_sync",t);
+     if($("lastSyncStatus"))$("lastSyncStatus").textContent="Last Sync: "+t;
+     setStatus("ok","Connected • Google Drive is Master");
+     log("Startup: Drive master loaded; browser cache replaced.");
+    }else if(cachedRecords.length){
+     records=cachedRecords;
+     saveLocal();
+     await syncCloud();
+     log("Startup: Drive was empty; existing cache migrated to Drive once.");
+    }else{
+     records=[];
+     saveLocal();
+     renderAll();
+     cloudConnected=true;
+     localStorage.setItem("mact_cloud_connected","1");
+     setStatus("ok","Connected • Google Drive is Master");
+     log("Startup: Drive master is empty; ready for first record.");
+    }
+   }catch(e){
+    console.warn("Drive master startup:",e);
+    setStatus("warn","Cloud Online / Retry Pending");
+    log("Startup Drive read failed; browser cache retained temporarily: "+e.message);
+   }
+  },500);
  }
+
+ clearInterval(cloudTimer);
+ cloudTimer=setInterval(()=>{if(navigator.onLine&&!syncBusy)pullCloud()},60000);
+
  const openNewBtn = $("openNewFileModalBtn");
  if(openNewBtn) openNewBtn.onclick = openNewRecord;
  if(!records.length && $("topAddDateBtn")){ $("topAddDateBtn").disabled = false; }
@@ -2953,12 +3003,8 @@ window.addEventListener("unhandledrejection",function(e){
   const $ = id => document.getElementById(id);
   const online = () => navigator.onLine !== false;
   const hasUrl = () => {
-    try {
-      return !!String(
-        localStorage.getItem("mact_v14_apps_script_url_v1") ||
-        localStorage.getItem("mact_cloud_url") || ""
-      ).trim();
-    } catch(e){ return false; }
+    try { return !!String(APPS_SCRIPT_URL || "").trim(); }
+    catch(e){ return false; }
   };
   const pending = () => {
     try { return localStorage.getItem(PENDING_KEY) === "1"; } catch(e){ return false; }
@@ -4152,14 +4198,9 @@ if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",
     <div class="m14-muted" id="m14Account">Backend: —</div>
    </section>
    <section class="m14-card m14-full">
-    <h3>🔗 Apps Script Web App URL</h3>
-    <div class="m14-row"><input id="m14ScriptUrl" type="url" autocomplete="off" placeholder="https://script.google.com/macros/s/AKfycbzvHDL6RBVGU4och-DZBj7cGeHOI3YoCvg3w3QKhiyRUx6lzPdVd3gfUC_qypwtB5Wt/exec"><button class="m14-btn m14-light" id="m14SaveUrl">Save & Test</button></div>
-    <p>यहाँ Google Apps Script का deployed <b>/exec</b> URL डालें। <b>Google Cloud Client ID की जरूरत नहीं है.</b></p>
-   </section>
-   <section class="m14-card">
-    <h3>🔐 Sync Key</h3>
-    <div class="m14-row"><input id="m14Secret" type="password" autocomplete="off" placeholder="V14 fixed Script Key (pre-filled)"><button class="m14-btn m14-light" id="m14SaveSecret">Save</button></div>
-    <p>V14 fixed Script Key Apps Script backend में पहले से set है। इसे Google password या service-account key न रखें.</p>
+    <h3>🔗 Apps Script Web App — Auto Configured</h3>
+    <div class="m14-row"><input id="m14ScriptUrl" type="url" autocomplete="off" readonly></div>
+    <p><b>Automatic connection enabled.</b> The Apps Script /exec URL is built into this HTML. No manual URL entry and no Sync Key are required.</p>
    </section>
    <section class="m14-card">
     <h3>📁 Drive destination</h3>
@@ -4174,7 +4215,7 @@ if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",
    <section class="m14-card">
     <h3>⚙️ Actions</h3>
     <div class="m14-row">
-     <button class="m14-btn m14-primary" id="m14Connect">Connect Apps Script</button>
+     <button class="m14-btn m14-primary" id="m14Connect">Check Connection</button>
      <button class="m14-btn m14-success" id="m14Sync">Sync Now</button>
      <button class="m14-btn m14-warn" id="m14Restore">Restore / Merge</button>
      <button class="m14-btn m14-light" id="m14Disconnect">Disconnect</button>
@@ -4185,9 +4226,9 @@ if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",
     <p class="m14-muted">Apps Script Web App Drive में एक JSON backup file maintain करता है। Local data connection fail होने पर सुरक्षित रहता है.</p>
    </section>
    <section class="m14-card m14-full">
-    <h3>🧭 Setup</h3>
-    <p>1. Google Apps Script में नीचे दिया V14 backend code paste करें → 2. <b>Deploy → New deployment → Web app</b> → 3. Execute as: <b>Me</b> → 4. Access: आपकी जरूरत के अनुसार <b>Anyone</b> / organization access → 5. /exec URL यहाँ paste करें.</p>
-    <p class="m14-muted">Apps Script web apps use <code>doGet(e)</code>/<code>doPost(e)</code>; Drive storage server-side <code>DriveApp</code> से होता है. citeturn0search1turn0search0</p>
+    <h3>🧭 Automatic Setup</h3>
+    <p><b>Already configured.</b> This HTML contains the deployed Apps Script /exec URL. On page startup it automatically checks Google Drive, loads the Drive master when available, and pushes local records only when the Drive master is empty or local changes need syncing.</p>
+    <p class="m14-muted">No URL paste, Sync Key, or manual connection is required. Manual <b>Sync Now</b> remains available only as an optional force-sync button.</p>
    </section>
    <section class="m14-card m14-full">
     <h3>🧪 Connection / Sync Log</h3>
@@ -4199,7 +4240,7 @@ if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",
 <script id="mact-v14-js">
 (function(){
  "use strict";
- const URL_KEY="mact_v14_apps_script_url_v1",SECRET_KEY="mact_v14_apps_script_secret_v1",FIXED_SCRIPT_KEY="MACT-V14-Drive-7fK9Q2xL-2026-Sync-4N8pZ6rT5Wc3",FIXED_SCRIPT_URL="https://script.google.com/macros/s/AKfycbzvHDL6RBVGU4och-DZBj7cGeHOI3YoCvg3w3QKhiyRUx6lzPdVd3gfUC_qypwtB5Wt/exec",FOLDER_KEY="mact_v14_drive_folder_name_v1",AUTO_KEY="mact_v14_drive_auto",LAST_KEY="mact_v14_drive_last_sync",SIG_KEY="mact_v14_drive_last_signature_v1",BACKUP_NAME="MACT_Legal_Portal_Data_V14.json";
+ const FIXED_SCRIPT_URL=APPS_SCRIPT_URL,FOLDER_KEY="mact_v14_drive_folder_name_v1",AUTO_KEY="mact_v14_drive_auto",LAST_KEY="mact_v14_drive_last_sync",SIG_KEY="mact_v14_drive_last_signature_v1",BACKUP_NAME="MACT_Legal_Portal_Data_V14.json";
  let syncing=false,autoTimer=null;
  const $=id=>document.getElementById(id);
  const now=()=>new Date().toISOString();
@@ -4207,8 +4248,7 @@ if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",
  function toast14(m){if(typeof window.toast==="function")window.toast(m);else log(m)}
  function setStatus(kind,text){const d=$("m14Dot"),s=$("m14Status");if(d)d.className="m14-dot "+(kind||"");if(s)s.textContent=text}
  function getUrl(){return FIXED_SCRIPT_URL}
- function getSecret(){return FIXED_SCRIPT_KEY}
- function saveSettings(){const u=FIXED_SCRIPT_URL;const sec=FIXED_SCRIPT_KEY;localStorage.setItem(URL_KEY,u);localStorage.setItem(SECRET_KEY,sec);const fn=$("m14FolderName")?.value.trim()||"MACT Legal Portal V14";localStorage.setItem(FOLDER_KEY,fn);localStorage.setItem("mact_cloud_url",u)}
+ function saveSettings(){const fn=$("m14FolderName")?.value.trim()||"MACT Legal Portal V14";localStorage.setItem(FOLDER_KEY,fn)}
  function localRecords(){try{return Array.isArray(window.MACT?.records)?window.MACT.records:JSON.parse(localStorage.getItem("mact_unlimited_records")||"[]")}catch(e){return[]}}
  function normalize(r){const x=Object.assign({},r||{});x.recordId=x.recordId||x.timestamp||("mact-v14-"+Date.now()+"-"+Math.random().toString(36).slice(2));x.createdAt=x.createdAt||x.updatedAt||now();x.updatedAt=x.updatedAt||x.createdAt;x.deleted=!!x.deleted;if(x.deleted&&!x.deletedAt)x.deletedAt=x.updatedAt;if(Array.isArray(x.documents))x.documents=x.documents.map(d=>{const y=Object.assign({},d);delete y.data;return y});delete x.judgmentPdfData;return x}
  function records(){return localRecords().map(normalize)}
@@ -4217,13 +4257,13 @@ if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",
  function payloadText(){return JSON.stringify(buildPayload())}
  async function sha(s){const b=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(s));return Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,"0")).join("")}
  function sizeKB(s){return (new TextEncoder().encode(s).byteLength/1024).toFixed(1)}
- function jsonp(action,extra={}){return new Promise((resolve,reject)=>{const url=getUrl();if(!url)return reject(new Error("Apps Script URL not configured"));const cb="mactV14Cb_"+Date.now()+"_"+Math.random().toString(36).slice(2);const script=document.createElement("script");const params=new URLSearchParams(Object.assign({action,callback:cb,secret:getSecret(),folder:$("m14FolderName")?.value.trim()||"MACT Legal Portal V14",_:Date.now()},extra));let timer=setTimeout(()=>{cleanup();reject(new Error("Apps Script GET timed out"))},20000);function cleanup(){clearTimeout(timer);delete window[cb];script.remove()}window[cb]=data=>{cleanup();if(data&&data.ok===false){reject(new Error(data.error||"Apps Script returned an error"));return}resolve(data)};script.onerror=()=>{cleanup();reject(new Error("Apps Script endpoint could not be reached"))};script.src=url+"?"+params.toString();document.head.appendChild(script)})}
- async function postBackup(){const url=getUrl();if(!url)throw new Error("Apps Script URL not configured");const body=JSON.stringify({action:"backup",secret:getSecret(),folder:$("m14FolderName")?.value.trim()||"MACT Legal Portal V14",fileName:BACKUP_NAME,payload:buildPayload()});await fetch(url,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain;charset=utf-8"},body});return true}
+ function jsonp(action,extra={}){return new Promise((resolve,reject)=>{const url=getUrl();if(!url)return reject(new Error("Apps Script URL not configured"));const cb="mactV14Cb_"+Date.now()+"_"+Math.random().toString(36).slice(2);const script=document.createElement("script");const params=new URLSearchParams(Object.assign({action,callback:cb,folder:$("m14FolderName")?.value.trim()||"MACT Legal Portal V14",_:Date.now()},extra));let timer=setTimeout(()=>{cleanup();reject(new Error("Apps Script GET timed out"))},45000);function cleanup(){clearTimeout(timer);delete window[cb];script.remove()}window[cb]=data=>{cleanup();if(data&&data.ok===false){reject(new Error(data.error||"Apps Script returned an error"));return}resolve(data)};script.onerror=()=>{cleanup();reject(new Error("Apps Script endpoint could not be reached"))};script.src=url+"?"+params.toString();document.head.appendChild(script)})}
+ async function postBackup(){const url=getUrl();if(!url)throw new Error("Apps Script URL not configured");const body=JSON.stringify({action:"backup",folder:$("m14FolderName")?.value.trim()||"MACT Legal Portal V14",fileName:BACKUP_NAME,payload:buildPayload()});await fetch(url,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain;charset=utf-8"},body});return true}
  function merge(local,cloud){const m=new Map(local.map(normalize).map(r=>[String(r.recordId),r]));(cloud||[]).map(normalize).forEach(r=>{const old=m.get(String(r.recordId));if(!old||((Date.parse(r.updatedAt)||0)>=(Date.parse(old.updatedAt)||0)))m.set(String(r.recordId),r)});return [...m.values()]}
  async function applyCloud(data){if(!data||!data.payload||!Array.isArray(data.payload.records))throw new Error("Invalid Drive backup returned by Apps Script");const p=data.payload;localStorage.setItem("mact_unlimited_records",JSON.stringify(p.records));Object.entries(p.appState||{}).forEach(([k,v])=>{try{localStorage.setItem(k,v)}catch(e){}});if(typeof window.loadLocal==="function")try{window.loadLocal()}catch(e){}if(typeof window.renderAll==="function")try{window.renderAll()}catch(e){}}
  async function sync(mode="merge"){
   if(syncing)return false;if(!navigator.onLine){setStatus("warn","Offline • local mode active");toast14("Offline — local data remains safe.");return false}syncing=true;setStatus("warn","Syncing via Apps Script…");
-  try{saveSettings();const local=records();const localText=payloadText();const oldSig=localStorage.getItem(SIG_KEY)||"";let cloud=null;try{cloud=await jsonp("get")}catch(e){log("Drive read failed: "+e.message)}
+  try{saveSettings();const local=records();const localText=payloadText();const oldSig=localStorage.getItem(SIG_KEY)||"";let cloud=null;try{cloud=await jsonp("get")}catch(e){log("Drive read failed: "+e.message);try{const h=await jsonp("health");if(h&&h.ok===true){setStatus("warn","Connected • Drive read retrying");log("Apps Script health check passed; large Drive read will be retried.")}}catch(_healthErr){}}
    if(mode==="upload"||!cloud||!cloud.payload){await postBackup();await new Promise(r=>setTimeout(r,900));const verify=await jsonp("get");localStorage.setItem(SIG_KEY,await sha(payloadText()));markLast();setStatus("ok","Connected • Google Drive backup active");log("Local → Apps Script → Drive completed.");toast14("Google Drive backup updated.");return true}
    const cloudRecords=cloud.payload.records||[];
    if(mode==="download"){await applyCloud(cloud);localStorage.setItem(SIG_KEY,await sha(payloadText()));markLast();setStatus("ok","Drive restore complete");log("Drive → local restore completed.");toast14("Drive data restored / merged.");return true}
@@ -4237,17 +4277,17 @@ if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",
   }catch(e){setStatus("err","Sync error");log("ERROR: "+e.message);toast14("Sync failed: "+e.message);return false}finally{syncing=false;updateUI()}
  }
  function markLast(){const t=now();localStorage.setItem(LAST_KEY,t);if($("m14Last"))$("m14Last").textContent="Last Drive sync: "+new Date(t).toLocaleString()}
- async function connect(){saveSettings();if(!getUrl()){toast14("पहले Apps Script /exec URL डालें.");return false}try{setStatus("warn","Testing Apps Script…");const r=await jsonp("health");if(!r||r.ok!==true)throw new Error(r?.error||"Health check failed");setStatus("ok","Connected • Apps Script + Drive");$("m14Account").textContent="Backend: Google Apps Script • DriveApp";log("Apps Script connection verified. Drive backend is reachable.");toast14("Google Apps Script connected successfully.");updateUI();return true}catch(e){setStatus("err","Apps Script connection failed");log("Connection error: "+e.message);toast14("Apps Script connection failed: "+e.message);return false}}
+ async function connect(){saveSettings();if(!getUrl()){toast14("पहले Apps Script /exec URL डालें.");return false}try{setStatus("warn","Testing Apps Script…");const r=await jsonp("health");if(!r||r.ok!==true)throw new Error(r?.error||"Health check failed");setStatus("ok","Connected • Apps Script + Drive");if($("syncStatus"))$("syncStatus").textContent="☁ Cloud Sync Active";if(typeof cloudConnected!=="undefined"){cloudConnected=true;localStorage.setItem("mact_cloud_connected","1");}$("m14Account").textContent="Backend: Google Apps Script • DriveApp";log("Apps Script connection verified. Drive backend is reachable.");toast14("Google Apps Script connected successfully.");updateUI();return true}catch(e){setStatus("err","Apps Script connection failed");log("Connection error: "+e.message);toast14("Apps Script connection failed: "+e.message);return false}}
  function disconnect(){setStatus("","Not connected");$("m14Account").textContent="Backend: —";log("Local Apps Script session cleared. Drive backup was not deleted.");toast14("Disconnected. Drive backup remains safe.")}
- function updateUI(){if($("m14CaseCount"))$("m14CaseCount").textContent=String(records().filter(r=>!r.deleted&&!r.deletedAt).length);if($("m14Size"))$("m14Size").textContent=sizeKB(payloadText())+" KB";const u=getUrl();if($("m14ScriptUrl"))$("m14ScriptUrl").value=u;if($("m14Secret"))$("m14Secret").value=getSecret();if($("m14FolderName"))$("m14FolderName").value=localStorage.getItem(FOLDER_KEY)||"MACT Legal Portal V14";if($("m14Secret")&&!localStorage.getItem(SECRET_KEY))$("m14Secret").value=FIXED_SCRIPT_KEY;if($("m14Auto"))$("m14Auto").checked=localStorage.getItem(AUTO_KEY)==="1";const last=localStorage.getItem(LAST_KEY);if(last&&$("m14Last"))$("m14Last").textContent="Last Drive sync: "+new Date(last).toLocaleString();if(u&&$("m14FileInfo"))$("m14FileInfo").textContent="Drive backup file: "+BACKUP_NAME+" • Apps Script managed"}
- function startAuto(){clearInterval(autoTimer);autoTimer=setInterval(async()=>{if(localStorage.getItem(AUTO_KEY)==="1"&&navigator.onLine&&!syncing&&getUrl()){try{const h=await sha(payloadText());if(h!==(localStorage.getItem(SIG_KEY)||""))await sync("merge")}catch(e){log("Auto-sync check: "+e.message)}}},30000)}
+ function updateUI(){if($("m14CaseCount"))$("m14CaseCount").textContent=String(records().filter(r=>!r.deleted&&!r.deletedAt).length);if($("m14Size"))$("m14Size").textContent=sizeKB(payloadText())+" KB";const u=getUrl();if($("m14ScriptUrl"))$("m14ScriptUrl").value=u;if($("m14FolderName"))$("m14FolderName").value=localStorage.getItem(FOLDER_KEY)||"MACT Legal Portal V14";if($("m14Auto"))$("m14Auto").checked=true;const last=localStorage.getItem(LAST_KEY);if(last&&$("m14Last"))$("m14Last").textContent="Last Drive sync: "+new Date(last).toLocaleString();if(u&&$("m14FileInfo"))$("m14FileInfo").textContent="Drive master file: "+BACKUP_NAME+" • Apps Script managed"}
+ function startAuto(){clearInterval(autoTimer);autoTimer=setInterval(async()=>{if(navigator.onLine&&!syncing&&getUrl()){try{const h=await sha(payloadText());if(h!==(localStorage.getItem(SIG_KEY)||""))await sync("merge")}catch(e){log("Auto-sync check: "+e.message)}}},30000)}
  function open(){const o=$("m14Ov");o.classList.add("show");o.setAttribute("aria-hidden","false");updateUI()}
  function close(){const o=$("m14Ov");o.classList.remove("show");o.setAttribute("aria-hidden","true")}
  function bind(){
   if($("googleLoginBtn"))$("googleLoginBtn").onclick=()=>open();
   if($("restoreCloudBtn"))$("restoreCloudBtn").onclick=()=>{if(confirm("Google Drive se V14 data restore/merge karna hai?"))sync("download")};
-  $("m14Fab").onclick=open;$("m14Close").onclick=close;$("m14Ov").addEventListener("click",e=>{if(e.target.id==="m14Ov")close()});$("m14SaveUrl").onclick=()=>{saveSettings();connect()};$("m14SaveSecret").onclick=()=>{saveSettings();toast14("Apps Script Sync Key saved locally.")};$("m14Connect").onclick=connect;$("m14Sync").onclick=()=>sync("merge");$("m14Restore").onclick=()=>{if(confirm("Drive backup ko local data ke saath merge/restore karna hai? Existing records newer timestamps ke basis par preserve honge."))sync("download")};$("m14Disconnect").onclick=disconnect;$("m14Auto").onchange=()=>{localStorage.setItem(AUTO_KEY,$("m14Auto").checked?"1":"0");startAuto()};
-  document.addEventListener("keydown",e=>{if(e.key==="Escape")close();if((e.ctrlKey||e.metaKey)&&e.shiftKey&&e.key.toLowerCase()==="d"){e.preventDefault();open()}});window.addEventListener("online",()=>{if(getUrl())setStatus("ok","Online • Apps Script ready")});window.addEventListener("offline",()=>setStatus("warn","Offline • local mode active"));updateUI();startAuto();
+  $("m14Fab").onclick=open;$("m14Close").onclick=close;$("m14Ov").addEventListener("click",e=>{if(e.target.id==="m14Ov")close()});$("m14Connect").onclick=connect;$("m14Sync").onclick=()=>sync("merge");$("m14Restore").onclick=()=>{if(confirm("Drive backup ko local data ke saath merge/restore karna hai? Existing records newer timestamps ke basis par preserve honge."))sync("download")};$("m14Disconnect").onclick=disconnect;$("m14Auto").onchange=()=>{if($("m14Auto"))$("m14Auto").checked=true;startAuto()};
+  document.addEventListener("keydown",e=>{if(e.key==="Escape")close();if((e.ctrlKey||e.metaKey)&&e.shiftKey&&e.key.toLowerCase()==="d"){e.preventDefault();open()}});window.addEventListener("online",()=>{if(getUrl())setStatus("ok","Online • Apps Script ready");if($("syncStatus")&&localStorage.getItem("mact_cloud_connected")==="1")$("syncStatus").textContent="☁ Cloud Sync Active";setTimeout(()=>{if(!syncing)sync("merge")},300)});window.addEventListener("offline",()=>setStatus("warn","Offline • local mode active"));updateUI();startAuto();setTimeout(async()=>{if(navigator.onLine&&getUrl()&&!syncing){try{await connect();await sync("merge")}catch(e){log("Automatic startup sync: "+e.message)}}},1200);
  }
  window.MACTV14={open,sync:()=>sync("merge"),connect,disconnect,update:updateUI,getConfig:()=>({scriptUrl:getUrl(),folder:localStorage.getItem(FOLDER_KEY)||"MACT Legal Portal V14"})};
  if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",bind,{once:true});else bind();
